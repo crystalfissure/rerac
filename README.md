@@ -2,9 +2,9 @@
   <img src="docs/assets/rerac-logo.png" alt="ReRAC" width="480">
 </p>
 
-<h1 align="center">ReRAC</h1>
+<h1 align="center">ReRAC Skybox Mod</h1>
 
-<p align="center">An unofficial native PC port of Ratchet & Clank (2002).</p>
+<p align="center">CrystalFissure's skybox swapping mod for ReRAC.</p>
 
 <p align="center">
   <a href="https://discord.gg/v2Ek44kdyu">Discord</a> ·
@@ -14,16 +14,33 @@
 
 ## Please read first
 
-> [!IMPORTANT]
-> This repository is for developing ReRAC, not for playing it. Players will install and run the game through the
-> ReRAC Launcher, which has not been released yet. Follow the project at [re-rac.github.io](https://re-rac.github.io).
+This fork adds an in-game picker for skies from the 19 planets. Load a level, press **F6**,
+choose a source with **Page Up / Page Down**, and press **F7** to apply or **F8** to restore.
+The selection resets when you change planets. Lighting and fog editing are planned separately.
+
+The mod ships as a **prebuilt Windows package**; players do not need Rust or source code.
+Extract the ZIP and double-click **Play-Skybox-Mod.cmd**. Its dialogs let you select existing
+ReRAC data or extract your supported disc ISO. The launcher is optional.
+ReRAC does not yet implement its planned plugin loader, so the package includes a runtime
+with the mod built in. It installs as its own version (`0.3.3-sky.1`) in the launcher's
+Development section. It cannot currently be stacked with other mods that replace the runtime.
+
+**Status: development preview, awaiting real-game visual testing.** The
+[Skybox Mod preview workflow](https://github.com/crystalfissure/rerac/actions/workflows/sky-swapper.yml)
+checks the code and builds the Windows ZIP. Successful builds prepare a draft prerelease for
+the owner to test before sharing. This README does not mean a build has passed or a release
+has been published; consult the workflow and [releases](https://github.com/crystalfissure/rerac/releases).
+
+See the [player guide](docs/mods/skybox/README.txt),
+[implementation notes](docs/workflows/sky-swapper.md), and
+[validation record](docs/workflows/sky-swapper-validation.md).
 
 > [!WARNING]
 > You need your own copy of the game: no game assets are included here. ReRAC currently supports one disc, listed on
 > the [supported versions](https://re-rac.github.io/docs/supported-versions/) page. ReRAC is an unofficial fan project
 > and is not affiliated with or endorsed by Sony Interactive Entertainment or Insomniac Games.
 
-## About
+## About ReRAC
 
 ReRAC rebuilds Ratchet & Clank (2002, PlayStation 2) as a native PC game, written in Rust on the Bevy engine. The
 game's systems are ported and run natively, with no emulator in between. The goal is a port
@@ -35,7 +52,9 @@ ReRAC is in early, active development and is not yet playable from start to fini
 more of the game comes to life with each update. See the [status page](https://re-rac.github.io/status/) for what
 works today.
 
-## Building from source
+## Developing the mod
+
+Players use the packaged download. The following instructions are for contributors.
 
 You need Rust, installed through [rustup](https://rustup.rs), and an image (`.iso`) of your own disc. macOS on Apple
 Silicon is the only platform tested so far. Run every command from the repository root.

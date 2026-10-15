@@ -86,6 +86,7 @@ mod shrub_light;
 mod shrub_render;
 mod sky_render;
 mod sky_stars;
+mod sky_swap;
 mod text_render;
 mod tfrag_light;
 mod tfrag_lod;
@@ -205,6 +206,7 @@ fn main() -> anyhow::Result<()> {
     .add_plugins(walloper_render::WalloperPlugin)
     .add_plugins(reactive_render::ReactivePlugin)
     .add_plugins(sky_stars::SkyStarsPlugin)
+    .add_plugins(sky_swap::SkySwapPlugin)
     .add_plugins(fog_state::FogStatePlugin)
     .add_plugins(screen_tint::ScreenTintPlugin)
     .add_plugins(visibomb_view::VisibombViewPlugin)

@@ -1,0 +1,106 @@
+name: Skybox Mod preview
+
+on:
+  push:
+    branches: ["work/skybox-swapper"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: skybox-mod-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Sky regression checks (Linux)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      - name: Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Type check
+        run: cargo check-all --locked
+      - name: Lints
+        run: cargo clippy-all --locked
+      - name: Sky regression tests
+        run: cargo xtask test-quick rc-engine --filter sky_
+
+  windows:
+    name: Windows x64 mod package
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Windows starter syntax
+        shell: powershell
+        run: |
+          $tokens = $null
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            "$env:GITHUB_WORKSPACE/tools/package/skybox/Start-Skybox-Mod.ps1",
+            [ref]$tokens, [ref]$parseErrors) | Out-Null
+          if ($parseErrors.Count -gt 0) {
+            $parseErrors | ForEach-Object { Write-Error $_ }
+            exit 1
+          }
+      - name: Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      # Workspace trace tools use Unix sockets. Check them on Linux; Windows builds
+      # only the runtime and extractor that players actually install.
+      - name: Build and package Skybox Mod for ReRAC Launcher
+        run: bash tools/package/skybox-mod.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rerac-skybox-mod-windows
+          path: |
+            dist/rerac-skybox-mod-*.zip
+            dist/rerac-skybox-mod-*.zip.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+  preview:
+    name: Prepare downloadable preview
+    needs: [checks, windows]
+    if: github.repository == 'crystalfissure/rerac' && github.ref == 'refs/heads/work/skybox-swapper'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: rerac-skybox-mod-windows
+          path: packages
+      - name: Create draft prerelease for gameplay testing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="skybox-v0.1.0-preview.1-${GITHUB_SHA:0:8}"
+          cp docs/mods/skybox/RELEASE_NOTES.md notes.md
+          printf '\nBuilt from commit `%s`.\n' "$GITHUB_SHA" >> notes.md
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" packages/*.zip packages/*.sha256 --clobber
+          else
+            gh release create "$tag" packages/*.zip packages/*.sha256 \
+              --target "$GITHUB_SHA" --draft --prerelease \
+              --title "Skybox Mod 0.1.0 preview 1 (${GITHUB_SHA:0:8})" \
+              --notes-file notes.md
+          fi
+          echo "Draft preview: https://github.com/$GITHUB_REPOSITORY/releases" >> "$GITHUB_STEP_SUMMARY"
+          echo 'Gameplay and visual testing are still required before publishing the draft.' >> "$GITHUB_STEP_SUMMARY"

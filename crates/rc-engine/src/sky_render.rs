@@ -81,6 +81,8 @@ pub struct LevelSky {
     /// The star records' memory as loaded: `maximum_sprite_count` × 0x20 bytes at header +0x1c (empty when
     /// the block has none). Generators leave some bytes untouched (e.g. a moving star's rotation).
     pub sprite_scratch: Vec<u8>,
+    /// Preloaded for a donor sky, so swapping never reads its overlay on the render thread.
+    pub star_tables: Option<rc_game::sky_stars::OverlayTables>,
 }
 
 /// Parses the level's sky block (None when the core index has none; every retail level has one).
@@ -94,7 +96,7 @@ pub fn load(core: &LevelCore, core_data: &[u8], level: u32) -> Result<Option<Lev
         Ok(o) if o > 0 => block.get(o..o + scratch_len).map(<[u8]>::to_vec).unwrap_or_default(),
         _ => Vec::new(),
     };
-    Ok(Some(LevelSky { level, sky, textures, sprite_scratch }))
+    Ok(Some(LevelSky { level, sky, textures, sprite_scratch, star_tables: None }))
 }
 
 /// Whether the level's sky dispatch zeroes header +4 (`clear_screen`) every frame, i.e. the frame is cleared
@@ -234,13 +236,21 @@ struct SkyAnim {
 
 pub struct SkyRenderPlugin;
 
+pub(crate) fn reset_sky_state(world: &mut World) {
+    world.remove_resource::<SkyAnim>();
+    world.remove_resource::<SkyStarOrder>();
+}
+
 impl Plugin for SkyRenderPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<SkyMaterial>::default())
+            .init_schedule(crate::sky_swap::SkyStartup)
+            .init_schedule(crate::sky_swap::SkyPostStartup)
+            .add_systems(crate::sky_swap::SkyStartup, spawn_sky)
             .add_systems(crate::level_switch::LevelStartup, spawn_sky)
             .add_systems(crate::level_switch::LevelPostStartup, main_camera_loads)
             .add_systems(crate::level_switch::LevelUnload, (crate::level_switch::remove::<SkyAnim>, crate::level_switch::remove::<SkyStarOrder>))
-            .add_systems(Update, (animate_shells, stop_clearing))
+            .add_systems(Update, (animate_shells, stop_clearing).after(crate::sky_swap::SkySwapSet))
             .add_systems(PostUpdate, follow_main_camera.before(TransformSystems::Propagate));
     }
 }
@@ -258,6 +268,7 @@ fn spawn_sky(
     mut meshes: ResMut<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<SkyMaterial>>,
+    mut cameras: Query<&mut Camera, With<SkyCamera>>,
 ) {
     let level: &LoadedLevel = &level.0;
     let Some(ls) = &level.sky else {
@@ -272,23 +283,28 @@ fn spawn_sky(
     let star_before = rc_game::sky_stars::level_stars(ls.level).map(|s| s.before_shell);
     let s = spawn_shells(&mut commands, ls, star_before, RenderLayers::layer(SKY_LAYER), &mut meshes, &mut images, &mut materials, |e, si| {
         let rot = rotations.iter().find(|r| r.shell == si).map_or(Quat::IDENTITY, |r| r.rotation(counter));
-        e.insert((Transform::from_rotation(rot), SkyShellEntity { shell: si }));
+        e.insert((Transform::from_rotation(rot), SkyShellEntity { shell: si }, crate::sky_swap::SkyOwned));
     });
     let (order, n_tris, star_order) = (s.order, s.triangles, s.star_order);
     let has_dome = ls.sky.shells.iter().any(|s| !s.textured());
     let clear_first_frame_only = level_zeroes_clear_flag(ls.level);
-    commands.spawn((
-        Camera3d { depth_load_op: Camera3dDepthLoadOp::Clear(0.0), ..default() },
-        // First frame: the loader's clear_screen = 1 clears to the level background (the ClearColor resource).
-        Camera { order: -1, clear_color: ClearColorConfig::Default, output_mode: CameraOutputMode::Skip, ..default() },
-        game_camera::game_projection(),
-        Tonemapping::None,
-        DebandDither::Disabled,
-        RenderLayers::layer(SKY_LAYER),
-        SkyCamera,
-        // Same MSAA as the main camera (crate::render_settings): the main pass loads this pass's depth.
-        crate::render_settings::WorldCamera,
-    ));
+    if cameras.is_empty() {
+        commands.spawn((
+            Camera3d { depth_load_op: Camera3dDepthLoadOp::Clear(0.0), ..default() },
+            // First frame: the loader's clear_screen = 1 clears to the level background (the ClearColor resource).
+            Camera { order: -1, clear_color: ClearColorConfig::Default, output_mode: CameraOutputMode::Skip, ..default() },
+            game_camera::game_projection(),
+            Tonemapping::None,
+            DebandDither::Disabled,
+            RenderLayers::layer(SKY_LAYER),
+            SkyCamera,
+            // Same MSAA as the main camera (crate::render_settings): the main pass loads this pass's depth.
+            crate::render_settings::WorldCamera,
+        ));
+    } else {
+        // Keep the camera's target, transform, MSAA and projection during a live swap.
+        for mut cam in &mut cameras { cam.clear_color = ClearColorConfig::Default; }
+    }
     let desc = |r: &ShellRotation| format!("shell {} period {} ×{}{}", r.shell, r.period, r.mul, if r.ry != 0.0 { format!(" Ry {}", r.ry) } else { String::new() });
     println!(
         "sky: {} shells ({} gouraud), {} draws, {} triangles, {} textures; rotating: [{}]{}; frame clear: {}",
@@ -447,7 +463,7 @@ fn main_camera_loads(
 /// After the first frame, levels whose dispatch zeroes the clear flag stop clearing.
 fn stop_clearing(anim: Option<Res<SkyAnim>>, mut cams: Query<&mut Camera, With<SkyCamera>>, mut frames: Local<u32>, generation: Res<crate::level_switch::LevelGeneration>) {
     // A runtime level change (crate::level_switch): the new level's first frame clears again.
-    if generation.is_changed() { *frames = 0; }
+    if generation.is_changed() || anim.as_ref().is_some_and(|a| a.is_added()) { *frames = 0; }
     let Some(anim) = anim else { return };
     *frames += 1;
     if *frames != 2 || !anim.clear_first_frame_only { return; }
@@ -498,6 +514,28 @@ pub(crate) fn follow_main_camera(main: MainView, mut sky: SkyView) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_swap_restarts_first_frame_clear_without_level_change() {
+        let mut app = App::new();
+        app.init_resource::<crate::level_switch::LevelGeneration>()
+            .add_systems(Update, stop_clearing);
+        let entity = app.world_mut().spawn((Camera::default(), SkyCamera)).id();
+        let anim = || SkyAnim { rotations: Vec::new(), speed: 1.0, clear_first_frame_only: true };
+        app.insert_resource(anim());
+        app.update();
+        assert!(matches!(app.world().get::<Camera>(entity).unwrap().clear_color, ClearColorConfig::Default));
+        app.update();
+        assert!(matches!(app.world().get::<Camera>(entity).unwrap().clear_color, ClearColorConfig::None));
+        // Same level generation: this is a sky swap, not a full level startup.
+        reset_sky_state(app.world_mut());
+        app.insert_resource(anim());
+        app.world_mut().get_mut::<Camera>(entity).unwrap().clear_color = ClearColorConfig::Default;
+        app.update();
+        assert!(matches!(app.world().get::<Camera>(entity).unwrap().clear_color, ClearColorConfig::Default));
+        app.update();
+        assert!(matches!(app.world().get::<Camera>(entity).unwrap().clear_color, ClearColorConfig::None));
+    }
 
     /// θ = (c & mask)·2π/(mask + 1) − π, as level01 0x29ee10 computes it for shell 4 (mask 0xffff).
     #[test]
