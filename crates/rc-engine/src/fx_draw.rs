@@ -290,6 +290,16 @@ pub struct FxAssets<'a> {
 }
 
 impl FxSlots {
+    /// Refresh only the material fog, including while animation/callback counters are paused.
+    /// This must not replay callbacks: some of them advance native draw state.
+    pub fn refresh_fog(&self, materials: &mut Assets<FxPrimMaterial>, fog: TfragFog) {
+        for (_, _, mat, _) in self.slots.iter().flatten() {
+            if materials.get(mat).is_some_and(|m| m.fog != fog) {
+                if let Some(mut m) = materials.get_mut(mat) { m.fog = fog; }
+            }
+        }
+    }
+
     /// FX image `i`, made on first use.
     fn image(&mut self, a: &mut FxAssets, i: usize) -> Option<Handle<Image>> {
         let t = a.fx?.get(i)?.as_ref()?;
@@ -757,7 +767,7 @@ impl Plugin for FxDrawPlugin {
             .init_resource::<FxDraw>()
             // A runtime level change (crate::level_switch): the slots' entities are gone.
             .add_systems(crate::level_switch::LevelUnload, crate::level_switch::reset::<FxDraw>)
-            .add_systems(PostUpdate, draw_list1.before(bevy::asset::AssetEventSystems));
+            .add_systems(PostUpdate, draw_list1.after(crate::fog_state::FogSet).before(bevy::asset::AssetEventSystems));
     }
 }
 
@@ -794,6 +804,8 @@ fn draw_list1(
     let Some(cam_t) = cams.iter().next() else { return };
     let counter = play.as_deref().map(|p| p.game.counter);
     let fog = fog.map(|f| f.uniform).unwrap_or_else(|| TfragFog::new(&level.0.fog));
+    state.slots.refresh_fog(&mut materials, fog);
+    state.slots2.refresh_fog(&mut materials, fog);
     if counter == state.drawn && counter.is_some() { return; }
     state.drawn = counter;
     let cam = game_eye(cam_t).to_array();
@@ -916,6 +928,31 @@ fn draw_list1(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn environment_fog_refresh_preserves_cached_effect_draws() {
+        let native = TfragFog { color: Vec4::ONE, params: Vec4::new(-0.5, 255.0, 0.0, 255.0) };
+        let edited = TfragFog { color: Vec4::new(0.2, 0.3, 0.4, 1.0), params: Vec4::new(0.0, 255.0, 255.0, 255.0) };
+        let mut materials = Assets::<FxPrimMaterial>::default();
+        let original = FxPrimMaterial { texture: Handle::default(), fog: native, params: FxPrimParams::blend(true), order: 123.0 };
+        let mat = materials.add(original.clone());
+        let unrelated = materials.add(original.clone());
+        let mut world = World::new();
+        let entity = world.spawn_empty().id();
+        let mut slots = FxSlots::default();
+        slots.slots.push(Some((entity, Handle::default(), mat.clone(), false)));
+        let before = slots.slots.clone();
+        slots.refresh_fog(&mut materials, edited);
+        assert_eq!(slots.slots, before, "fog-only edits must retain mesh handles, visibility and draw slots");
+        let current = materials.get(&mat).unwrap();
+        assert_eq!(current.fog, edited);
+        assert_eq!(current.texture, original.texture);
+        assert_eq!(current.params.misc, original.params.misc);
+        assert_eq!(current.order, original.order);
+        assert_eq!(materials.get(&unrelated).unwrap().fog, native, "do not override another effect's local fog");
+        slots.refresh_fog(&mut materials, native);
+        assert_eq!(materials.get(&mat).unwrap().fog, native);
+    }
 
     /// `0x2781d0`: a square of side 2·size centred on the point pulled toward the camera, facing it, upright (z up),
     /// corners in the table's order with its ST, one colour.

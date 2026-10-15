@@ -140,7 +140,7 @@ impl Plugin for FlightRenderPlugin {
                 PostUpdate,
                 (update_sky, sky_tan).chain().after(crate::sky_render::follow_main_camera).after(crate::travel_render::view_layers).before(bevy::transform::TransformSystems::Propagate),
             )
-            .add_systems(PostUpdate, draw_fx.before(bevy::asset::AssetEventSystems));
+            .add_systems(PostUpdate, draw_fx.after(crate::fog_state::FogSet).before(bevy::asset::AssetEventSystems));
     }
 }
 

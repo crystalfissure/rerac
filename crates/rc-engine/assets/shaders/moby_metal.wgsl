@@ -27,9 +27,19 @@
 #import rerac::display_blend::gs_mix
 #endif
 
+#import rerac::world_lights::environment_vertex_color
+
 struct MobyFog {
     color: vec4<f32>,
     params: vec4<f32>,
+    // Shared buffer reserves the texture option before mod lighting.
+    tex_mode: vec4<f32>,
+    // Environment mod: RGB scale and enabled flag, then RGB additive lift.
+    light_mul: vec4<f32>,
+    light_add: vec4<f32>,
+    // Native fog for menu/vendor models, as in moby.wgsl.
+    native_color: vec4<f32>,
+    native_params: vec4<f32>,
 }
 
 struct MobyInst {
@@ -38,6 +48,7 @@ struct MobyInst {
     light_colors: array<vec4<f32>, 3>,
     neg_k: vec4<f32>,
     ambient: vec4<f32>,
+    // y bit31 marks a UI model excluded from environment lighting, as in moby.wgsl.
     misc: vec4<u32>,
 }
 
@@ -71,6 +82,7 @@ struct MetalVertexOutput {
     @location(0) st: vec2<f32>,
     @location(1) @interpolate(linear) color: vec4<f32>,
     @location(2) @interpolate(linear) fog: f32,
+    @location(3) @interpolate(flat) native_fog: u32,
 }
 
 fn s16(x: i32) -> i32 { return (x << 16u) >> 16u; }
@@ -82,6 +94,7 @@ fn vertex(v: MetalVertex) -> MetalVertexOutput {
     let inst = &insts[tag];
     let lod = &lods[tag];
     let base = (*inst).misc.x;
+    out.native_fog = ((*inst).misc.y >> 31u) & 1u;
 
     let count = (v.skin.x >> 16u) & 0xffu;
     let j = vec3<u32>(v.skin.y & 0xffu, (v.skin.y >> 8u) & 0xffu, (v.skin.y >> 16u) & 0xffu);
@@ -111,13 +124,17 @@ fn vertex(v: MetalVertex) -> MetalVertexOutput {
     let c2 = floor((*inst).light_colors[2].xyz * d.z * 32.0);
     let rgb = (vec3<i32>(112) + vec3<i32>(c0) + vec3<i32>(c1) + vec3<i32>(c2)) & vec3<i32>(0xff);
     out.color = vec4<f32>(vec3<f32>(rgb), f32((*lod).misc.z)) / 128.0;
+    if (out.native_fog == 0u) {
+        out.color = environment_vertex_color(out.color, fog.light_mul, fog.light_add);
+    }
 
     let e = (*lod).e[0].xy * np.x + (*lod).e[1].xy * np.y + (*lod).e[2].xy * np.z;
     let q = vec2<i32>(trunc((e + vec2<f32>(1.0)) * 4096.0)) >> vec2<u32>(1u);
     out.st = vec2<f32>(q) / 4096.0;
 
     let depth = -position_world_to_view(world).z * 1024.0;
-    let fg = max(min(depth * fog.params.x + fog.params.y, fog.params.w), fog.params.z);
+    let fp = select(fog.params, fog.native_params, out.native_fog != 0u);
+    let fg = max(min(depth * fp.x + fp.y, fp.w), fp.z);
     out.fog = trunc(fg) / 255.0;
     return out;
 }
@@ -132,8 +149,9 @@ fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
 fn fragment(in: MetalVertexOutput) -> @location(0) vec4<f32> {
     let t = textureSample(tex, tex_sampler, in.st);
     var rgb = min(t.rgb * in.color.rgb, vec3<f32>(1.0));
-    if (fog.color.w > 0.5) {
-        rgb = mix(fog.color.rgb, rgb, in.fog);
+    let fc = select(fog.color, fog.native_color, in.native_fog != 0u);
+    if (fc.w > 0.5) {
+        rgb = mix(fc.rgb, rgb, in.fog);
     }
     let a_s = min(floor(round(t.a * 255.0) * round(in.color.a * 128.0) / 128.0), 255.0);
 #ifdef GS_ATEST_PASS

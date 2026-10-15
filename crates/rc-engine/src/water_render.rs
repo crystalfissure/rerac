@@ -277,6 +277,22 @@ pub struct WaterState {
     ripple_bytes: Vec<u8>,
 }
 
+impl WaterState {
+    /// Refresh presentation independently of animation. A paused frame may still receive a fog edit;
+    /// returning false keeps the scroll, ripple and after-draw bob updates at their original tick rate.
+    fn prepare_draw(&mut self, fog: TfragFog, materials: &mut Assets<WaterMaterial>) -> bool {
+        if fog != self.fog {
+            self.fog = fog;
+            for h in &self.materials {
+                if let Some(mut m) = materials.get_mut(h) { m.fog = fog; }
+            }
+        }
+        if self.ticks == self.drawn_ticks { return false; }
+        self.drawn_ticks = self.ticks;
+        true
+    }
+}
+
 pub struct WaterPlugin;
 
 impl Plugin for WaterPlugin {
@@ -289,7 +305,7 @@ impl Plugin for WaterPlugin {
             .add_systems(crate::level_switch::LevelStartup, (setup, fire_field_setup))
             .add_systems(crate::level_switch::LevelUnload, (crate::level_switch::remove::<WaterState>, crate::level_switch::remove::<FireFieldDraw>))
             .add_systems(FixedUpdate, tick)
-            .add_systems(PostUpdate, (draw, draw_fire_fields).before(bevy::asset::AssetEventSystems));
+            .add_systems(PostUpdate, (draw, draw_fire_fields).after(crate::fog_state::FogSet).before(bevy::asset::AssetEventSystems));
     }
 }
 
@@ -561,16 +577,8 @@ fn draw(
 ) {
     let Some(mut st) = state else { return };
     let st = &mut *st;
-    if st.ticks == st.drawn_ticks { return; }
-    st.drawn_ticks = st.ticks;
     let fog = fog.map(|f| f.uniform).unwrap_or_else(|| TfragFog::new(&level.0.fog));
-    // The fog uniform is the only material field that changes: written only when the frame's fog differs.
-    if fog != st.fog {
-        st.fog = fog;
-        for h in &st.materials {
-            if let Some(mut m) = materials.get_mut(h) { m.fog = fog; }
-        }
-    }
+    if !st.prepare_draw(fog, &mut materials) { return; }
     let Some(cam_t) = cams.iter().next() else { return };
     let cam = game_eye(cam_t).to_array();
     // The view's tangent as the game's camera writes it (0x16cf70: Gemlik's ship widens it), as the main camera's.
@@ -961,5 +969,36 @@ fn draw_fire_fields(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn environment_water_fog_refreshes_with_frozen_animation_ticks() {
+        let original = TfragFog { color: Vec4::ONE, params: Vec4::new(-0.1, 255.0, 100.0, 255.0) };
+        let edited = TfragFog { color: Vec4::new(0.2, 0.4, 0.8, 1.0), params: Vec4::new(0.0, 255.0, 255.0, 255.0) };
+        let mut materials = Assets::<WaterMaterial>::default();
+        let mat = materials.add(WaterMaterial { texture: default(), fog: original, params: default(), frame: default(), ripple: default(), slot: 7 });
+        let mut state = WaterState {
+            classes: vec![ClassDraw { class: 1225, anim: StripAnim::BobAfterDraw1225, w: Pf::ONE, strips: vec![] }],
+            ripple_at: 0, patches: vec![], fallback: None, fallback_inputs: None, fallback_rng: Rng::new(),
+            counter: 50, ticks: 50, drawn_ticks: 50, stats: false, fx_images: vec![], materials: vec![mat.clone()],
+            fog: original, frame: default(), frame_bytes: vec![1, 2, 3], ripple_buf: default(), ripple_bytes: vec![4, 5, 6],
+        };
+        assert!(!state.prepare_draw(edited, &mut materials), "fog-only edit must not replay draw callbacks");
+        assert_eq!(materials.get(&mat).unwrap().fog, edited);
+        assert_eq!((state.counter, state.ticks, state.drawn_ticks), (50, 50, 50));
+        assert_eq!(state.classes[0].w, Pf::ONE);
+        assert_eq!(state.fallback_rng, Rng::new());
+        assert_eq!(state.frame_bytes, [1, 2, 3]);
+        assert_eq!(state.ripple_bytes, [4, 5, 6]);
+        assert!(!state.prepare_draw(original, &mut materials), "restore also updates while paused");
+        assert_eq!(materials.get(&mat).unwrap().fog, original);
+        state.ticks += 1;
+        assert!(state.prepare_draw(original, &mut materials));
+        assert!(!state.prepare_draw(original, &mut materials), "one draw per animation tick");
     }
 }

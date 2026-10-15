@@ -15,7 +15,7 @@ pub struct TeslaPlugin;
 
 impl Plugin for TeslaPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<TeslaDraw>().add_systems(crate::level_switch::LevelUnload, crate::level_switch::reset::<TeslaDraw>).add_systems(PostUpdate, draw.before(bevy::asset::AssetEventSystems));
+        app.init_resource::<TeslaDraw>().add_systems(crate::level_switch::LevelUnload, crate::level_switch::reset::<TeslaDraw>).add_systems(PostUpdate, draw.after(crate::fog_state::FogSet).before(bevy::asset::AssetEventSystems));
     }
 }
 
@@ -37,6 +37,9 @@ fn draw(
     mut materials: ResMut<Assets<FxPrimMaterial>>,
     mut vis: Query<&mut Visibility>,
 ) {
+    let fog = fog.map(|f| f.uniform).unwrap_or_else(|| TfragFog::new(&level.0.fog));
+    // Fog can change while paused; refresh materials without rebuilding or advancing the effect.
+    state.slots.refresh_fog(&mut materials, fog);
     let counter = play.as_deref().map(|p| p.game.counter);
     if counter == state.drawn && counter.is_some() { return; }
     state.drawn = counter;
@@ -53,7 +56,6 @@ fn draw(
             }
         }
     }
-    let fog = fog.map(|f| f.uniform).unwrap_or_else(|| TfragFog::new(&level.0.fog));
     let tex = level.0.particles.textures.as_ref().map(|t| t.fx_textures.as_slice());
     let mut a = FxAssets { meshes: &mut meshes, images: &mut images, materials: &mut materials, fx: tex, fog };
     state.slots.show(&mut commands, &mut vis, &mut a, groups, BAND, "tesla");

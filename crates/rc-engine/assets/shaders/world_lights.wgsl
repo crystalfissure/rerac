@@ -99,3 +99,12 @@ fn instance_lit_packed(rgba: u32, il: InstanceLight, n: vec3<f32>, m: mat4x4<f32
     let lit = vec3<u32>(instance_lit(c, il, nw, top));
     return lit.x | (lit.y << 8u) | (lit.z << 16u) | (rgba & 0xff000000u);
 }
+
+// Environment mod adjustment after the native light/LOD result and before texture multiplication/fog.
+// Byte-like colour is represented as /128; its PS2 upper bound is 255/128, not 1.
+// A disabled/neutral upload returns the original value exactly, including its alpha.
+fn environment_vertex_color(color: vec4<f32>, mul: vec4<f32>, add: vec4<f32>) -> vec4<f32> {
+    if (mul.w < 0.5) { return color; }
+    let rgb = clamp(color.rgb * mul.rgb + add.rgb, vec3<f32>(0.0), vec3<f32>(255.0 / 128.0));
+    return vec4<f32>(rgb, color.a);
+}

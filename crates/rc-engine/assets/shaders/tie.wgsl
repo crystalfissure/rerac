@@ -25,13 +25,16 @@
     mesh_functions,
     view_transformations::{position_world_to_clip, position_world_to_view},
 }
-#import rerac::world_lights::{WorldLight, NO_LIGHTS, InstanceLight, instance_light, instance_lit_packed}
+#import rerac::world_lights::{WorldLight, NO_LIGHTS, InstanceLight, instance_light, instance_lit_packed, environment_vertex_color}
 
 struct TieFog {
     color: vec4<f32>,
     params: vec4<f32>,
     // x: the texture option (crate::graphics; sample_world).
     tex_mode: vec4<f32>,
+    // Environment mod: RGB scale and enabled flag, then RGB additive lift.
+    light_mul: vec4<f32>,
+    light_add: vec4<f32>,
 }
 
 struct TieParams {
@@ -204,7 +207,7 @@ fn vertex(v: TieVertex) -> TieVertexOutput {
             rgba |= lane << i;
         }
     }
-    out.color = unpack4x8unorm(rgba) * (255.0 / 128.0);
+    out.color = environment_vertex_color(unpack4x8unorm(rgba) * (255.0 / 128.0), fog.light_mul, fog.light_add);
     out.depth = -position_world_to_view(world).z * 1024.0;
     out.fog = f32(lod.x >> 8u) / 255.0;
     out.k = f32(bitcast<i32>(v.info) >> 20u) / 16.0;

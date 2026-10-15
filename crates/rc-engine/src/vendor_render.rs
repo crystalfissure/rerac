@@ -88,7 +88,18 @@ impl Plugin for VendorRenderPlugin {
         if !crate::gameplay::enabled() { return; }
         app.add_systems(crate::level_switch::LevelUnload, crate::level_switch::remove::<VendorGfx>);
         app.add_systems(PreUpdate, setup).add_systems(Update, draw.after(crate::menu_render::MenuPrims).before(HudBuild));
+        app.add_systems(PostUpdate, refresh_world_fog.after(crate::fog_state::FogSet).before(bevy::asset::AssetEventSystems));
     }
+}
+
+/// The world hologram is prepared with the menu draws in Update. Refresh its material after this
+/// frame's displayed fog, without rerunning the UI draws or advancing the beam's animation.
+fn refresh_world_fog(
+    gfx: Option<Res<VendorGfx>>,
+    fog: Option<Res<crate::game_camera::GameFog>>,
+    mut materials: ResMut<Assets<crate::fx_draw::FxPrimMaterial>>,
+) {
+    if let (Some(gfx), Some(fog)) = (gfx, fog) { gfx.cone.refresh_fog(&mut materials, fog.uniform); }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -369,7 +380,7 @@ fn draw(
         }
         let lights = bank.as_ref().map(|bank| moby_light::moby_lights(&rows_bits(&s.rows), bank, s.light, s.ambient, 0x80));
         let model = moby_render::extra_model(s.rows, s.scale, s.pos);
-        let r = moby_render::extra_record(&model, lights.as_ref(), base);
+        let r = moby_render::extra_ui_record(&model, lights.as_ref(), base);
         let o = *slot as usize * moby_render::EXTRA_RECORD_SIZE;
         if let Some(x) = records.get_mut(o..o + r.len()) { x.copy_from_slice(&r); }
         let t = Transform::from_matrix(model);

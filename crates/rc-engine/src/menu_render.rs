@@ -1627,7 +1627,7 @@ fn menu_layer(
         let base = i * fr.slots as usize;
         let bytes: Vec<u8> = m.iter().take(fr.slots as usize).flat_map(|r| r.iter().flatten().flat_map(|v| v.to_le_bytes())).collect();
         if let Some(dst) = pal.get_mut(base * 64..base * 64 + bytes.len()) { dst.copy_from_slice(&bytes); }
-        let r = moby_render::extra_record(&fold, fr.lights.as_ref(), base as u32);
+        let r = moby_render::extra_ui_record(&fold, fr.lights.as_ref(), base as u32);
         let at = i * moby_render::EXTRA_RECORD_SIZE;
         if let Some(dst) = rec.get_mut(at..at + r.len()) { dst.copy_from_slice(&r); }
         let t = Transform::from_matrix(fold);

@@ -4,7 +4,7 @@
 
 <h1 align="center">ReRAC Skybox Mod</h1>
 
-<p align="center">CrystalFissure's skybox swapping mod for ReRAC.</p>
+<p align="center">CrystalFissure's skybox, lighting and fog mod for ReRAC.</p>
 
 <p align="center">
   <a href="https://discord.gg/v2Ek44kdyu">Discord</a> ·
@@ -16,23 +16,40 @@
 
 This fork adds an in-game picker for skies from the 19 planets. Load a level, press **F6**,
 choose a source with **Page Up / Page Down**, and press **F7** to apply or **F8** to restore.
-The selection resets when you change planets. Lighting and fog editing are planned separately.
+Press **F5** for live brightness, RGB tint, shadow lift and fog controls. Use
+**Home / End** to select a row, **[ / ]** to adjust, **Delete** to reset that control,
+**F4** to compare original lighting/fog, and **F3** to reset all lighting/fog edits.
+Keep the relevant panel open for editing keys. The lighting/fog editor also has
+clickable controls; **Esc** releases the cursor. Gameplay continues during editing.
+Opening one panel closes the other without discarding its settings. All edits reset
+when you change planets; saved presets are not yet supported.
+
+Vertex-colour controls affect terrain, props, shrubs and actors, including metallic
+actors. They exclude sky, HUD, menu previews, and water/effect vertex colours.
+Fog strength, distance and RGB edits change rendering while preserving object draw
+distance, detail levels, clipping and physics. Special sea effects keep their own
+fog; menu previews keep their normal lighting and fog. Lighting/fog edits temporarily
+pause in title screens, movies, cutscenes and ship travel.
 
 The mod ships as a **prebuilt Windows package**; players do not need Rust or source code.
 Extract the ZIP and double-click **Play-Skybox-Mod.cmd**. Its dialogs let you select existing
-ReRAC data or extract your supported disc ISO. The launcher is optional.
+ReRAC data or extract your supported disc ISO. Windows also needs the
+[Microsoft Visual C++ Redistributable (x64)](https://aka.ms/vc14/vc_redist.x64.exe)
+if it is not already installed; this resolves a missing `VCRUNTIME140.dll` error.
+The launcher is optional.
 ReRAC does not yet implement its planned plugin loader, so the package includes a runtime
-with the mod built in. It installs as its own version (`0.3.3-sky.1`) in the launcher's
+with the mod built in. It installs as its own version (`0.3.3-sky.2`) in the launcher's
 Development section. It cannot currently be stacked with other mods that replace the runtime.
 
-**Status: development preview, awaiting real-game visual testing.** The
-[Skybox Mod preview workflow](https://github.com/crystalfissure/rerac/actions/workflows/sky-swapper.yml)
+**Status: 0.2.0-preview.1, awaiting real-game visual testing.** The
+[Skybox and Lighting Mod preview workflow](https://github.com/crystalfissure/rerac/actions/workflows/sky-swapper.yml)
 checks the code and builds the Windows ZIP. Successful builds prepare a draft prerelease for
 the owner to test before sharing. This README does not mean a build has passed or a release
 has been published; consult the workflow and [releases](https://github.com/crystalfissure/rerac/releases).
 
 See the [player guide](docs/mods/skybox/README.txt),
-[implementation notes](docs/workflows/sky-swapper.md), and
+[sky implementation notes](docs/workflows/sky-swapper.md),
+[lighting/fog notes](docs/workflows/environment-mod.md), and
 [validation record](docs/workflows/sky-swapper-validation.md).
 
 > [!WARNING]

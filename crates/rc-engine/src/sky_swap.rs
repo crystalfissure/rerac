@@ -127,12 +127,19 @@ fn load_donor(root: &Path, source: u32) -> Result<LevelSky> {
     Ok(sky)
 }
 
-fn world_available(world: &World) -> bool {
+pub(crate) fn world_available(world: &World) -> bool {
     !crate::saves::front_end_active()
         && !world.get_resource::<crate::travel_render::Travel>()
             .is_some_and(|t| t.blanked() || t.mode.active() || t.transition_fog().is_some())
         && !world.get_resource::<crate::movie_render::MovieState>().is_some_and(|m| m.busy())
         && !world.get_resource::<crate::scene_render::ActiveScene>().is_some_and(|s| s.running)
+}
+
+/// The two mod panels share screen space, so opening one closes the other.
+pub(crate) fn close_panel(world: &mut World) {
+    if let Some(mut picker) = world.get_resource_mut::<Picker>() {
+        if picker.open { picker.open = false; }
+    }
 }
 
 fn setup_panel(mut commands: Commands) {
@@ -174,6 +181,7 @@ fn update_picker(world: &mut World, available: bool) {
         keys.just_pressed(KeyCode::PageDown), keys.just_pressed(KeyCode::F7),
         keys.just_pressed(KeyCode::F8),
     );
+    if toggle { crate::environment_mod::close_panel(world); }
     world.resource_scope(|world, mut p: Mut<Picker>| {
         if toggle { p.open = !p.open; }
         if available && p.open {

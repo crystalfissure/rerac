@@ -17,7 +17,7 @@ done
 
 repo="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$repo"
-mod_version="0.1.0-preview.1"
+mod_version="0.2.0-preview.1"
 version="$(awk '/^\[/ { in_pkg = ($0 == "[workspace.package]") } in_pkg && /^version = "/ { gsub(/^version = "|"$/, ""); print; exit }' Cargo.toml)"
 case "$version" in
   ''|*[!a-zA-Z0-9.+-]*) echo "invalid workspace version: $version" >&2; exit 1 ;;
