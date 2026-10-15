@@ -80,8 +80,12 @@ pub fn overlay_read(overlay: &[u8], vaddr: u32, len: usize) -> Option<Vec<u8>> {
 
 /// The level-06/17 tables from the level's overlay (zeros on the levels that do not read them).
 fn load_tables(level: u32) -> Result<OverlayTables> {
+    load_tables_from(&crate::level_load::extracted_root(), level)
+}
+
+pub(crate) fn load_tables_from(root: &std::path::Path, level: u32) -> Result<OverlayTables> {
     if !matches!(level, 6 | 17) { return Ok(OverlayTables::default()); }
-    let ov = crate::disc_source::level_file(&crate::level_load::extracted_root(), level, "overlay.bin").context("reading overlay.bin")?;
+    let ov = crate::disc_source::level_file(root, level, "overlay.bin").context("reading overlay.bin")?;
     let t = OverlayTables::read(|a, n| overlay_read(&ov, a, n));
     match t {
         Some(t) => Ok(t),
@@ -99,6 +103,40 @@ pub(crate) struct StarSim {
     groups: Vec<(u8, SpriteBuffer, Handle<ShaderBuffer>)>,
     drawn: usize,
     stats: bool,
+}
+
+/// Keep advancing the original stars on the game's RNG while a donor uses its own stream.
+/// An empty baseline matters too: a starless host must not acquire a gameplay RNG consumer.
+#[derive(Resource)]
+pub(crate) struct OriginalStars(pub Option<StarSim>);
+
+pub(crate) fn preserve_original(world: &mut World) {
+    let original = world.remove_resource::<StarSim>().map(|mut s| {
+        s.groups.clear(); // release GPU handles; only the simulation is kept
+        s
+    });
+    world.insert_resource(OriginalStars(original));
+}
+
+pub(crate) fn restore_original(world: &mut World) {
+    let Some(OriginalStars(Some(old))) = world.remove_resource::<OriginalStars>() else { return };
+    if let Some(mut fresh) = world.get_resource_mut::<StarSim>() {
+        fresh.stars = old.stars;
+        fresh.fallback_rng = old.fallback_rng;
+        fresh.frames = old.frames;
+    }
+}
+
+/// Advance the invisible host on the gameplay stream and the visible donor on a private stream.
+fn advance_override(original: &mut OriginalStars, donor: Option<&mut StarSim>, shared: Option<&mut Rng>) {
+    if let Some(old) = original.0.as_mut() {
+        old.stars.frame(shared.unwrap_or(&mut old.fallback_rng));
+        old.frames += 1;
+    }
+    if let Some(sim) = donor {
+        sim.stars.frame(&mut sim.fallback_rng);
+        sim.frames += 1;
+    }
 }
 
 #[derive(Component)]
@@ -156,8 +194,9 @@ pub struct SkyStarsPlugin;
 impl Plugin for SkyStarsPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<SkyStarMaterial>::default())
+            .add_systems(crate::sky_swap::SkyPostStartup, setup)
             .add_systems(crate::level_switch::LevelPostStartup, setup)
-            .add_systems(crate::level_switch::LevelUnload, crate::level_switch::remove::<StarSim>)
+            .add_systems(crate::level_switch::LevelUnload, (crate::level_switch::remove::<StarSim>, crate::level_switch::remove::<OriginalStars>))
             .add_systems(FixedUpdate, star_frame.after(crate::particle_render::tick).after(crate::gameplay::GameTick))
             .add_systems(PostUpdate, build_meshes);
     }
@@ -197,7 +236,9 @@ pub(crate) fn spawn_stars(
         println!("sky stars: RC_SKY_STARS=0, not generated or drawn (the rand stream then differs from the game's)");
         return None;
     }
-    let tables = if ls.level == rc_game::sky_stars::TITLE_LEVEL {
+    let tables = if let Some(t) = ls.star_tables {
+        t
+    } else if ls.level == rc_game::sky_stars::TITLE_LEVEL {
         rc_game::sky_stars::OverlayTables::default()
     } else {
         match load_tables(ls.level) {
@@ -230,7 +271,7 @@ pub(crate) fn spawn_stars(
             sprites: buffer.clone(),
             bias: slot as f32 * ORDER_SPACING + g as f32,
         });
-        commands.spawn((
+        let mut entity = commands.spawn((
             Mesh3d(mesh.clone()),
             MeshMaterial3d(mat),
             Transform::IDENTITY,
@@ -240,6 +281,7 @@ pub(crate) fn spawn_stars(
             StarDraw(groups.len()),
             Name::new(format!("sky stars tex {t}")),
         ));
+        if layer == RenderLayers::layer(SKY_LAYER) { entity.insert(crate::sky_swap::SkyOwned); }
         groups.push((t, sprites, buffer));
     }
     println!(
@@ -258,9 +300,22 @@ pub(crate) fn spawn_stars(
 /// One star frame per game tick, after the particle tick (same `rand` stream).
 fn star_frame(
     sim: Option<ResMut<StarSim>>,
+    original: Option<ResMut<OriginalStars>>,
     play: Option<ResMut<crate::gameplay::Play>>,
     part: Option<ResMut<crate::particle_render::ParticleSim>>,
 ) {
+    if let Some(mut original) = original {
+        // The title owns a separate StarSim while shown; don't intercept its tick.
+        if !crate::saves::front_end_active() {
+            let shared = match (play, part) {
+                (Some(p), _) => Some(&mut p.into_inner().game.rng),
+                (None, Some(p)) => Some(&mut p.into_inner().rng),
+                (None, None) => None,
+            };
+            advance_override(&mut original, sim.map(|s| s.into_inner()), shared);
+            return;
+        }
+    }
     let Some(mut sim) = sim else { return };
     let sim = &mut *sim;
     let rng = match (play, part) {
@@ -339,6 +394,59 @@ fn build_meshes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn simulation(level: u32) -> StarSim {
+        let mut rng = Rng::new();
+        rng.srand(LEVEL_SEED);
+        StarSim {
+            stars: SkyStars::new(level, OverlayTables::default(), Vec::new()),
+            fallback_rng: rng, frames: 0, groups: Vec::new(), drawn: 0, stats: false,
+        }
+    }
+
+    #[test]
+    fn donor_stars_do_not_change_gameplay_rng_or_host_star_continuity() {
+        for host in [0, 1, 2, 6, 17] {
+            let mut vanilla_rng = Rng::new();
+            vanilla_rng.srand(LEVEL_SEED);
+            let mut modded_rng = vanilla_rng;
+            let mut vanilla = level_stars(host).map(|_| simulation(host));
+            let mut original = OriginalStars(level_stars(host).map(|_| simulation(host)));
+            let mut donor = simulation(6);
+            for frame in 0..360 {
+                // Simulate another gameplay RNG consumer between sky frames.
+                assert_eq!(vanilla_rng.rand(), modded_rng.rand());
+                if let Some(s) = &mut vanilla { s.stars.frame(&mut vanilla_rng); }
+                if frame == 120 { donor = simulation(17); }
+                // Also exercise a starless donor: the invisible host must still advance.
+                let visible = if frame >= 240 { None } else { Some(&mut donor) };
+                advance_override(&mut original, visible, Some(&mut modded_rng));
+                assert_eq!(vanilla_rng.state, modded_rng.state, "host {host}, frame {frame}");
+                if let (Some(a), Some(b)) = (&vanilla, &original.0) { assert_eq!(a.stars.stars, b.stars.stars); }
+            }
+        }
+    }
+
+    #[test]
+    fn restoration_retains_host_simulation_progress() {
+        let mut world = World::new();
+        let mut original = simulation(0);
+        original.stars.frame(&mut original.fallback_rng);
+        original.frames = 1;
+        let expected_stars = original.stars.stars.clone();
+        let expected_rng = original.fallback_rng;
+        world.insert_resource(original);
+        preserve_original(&mut world);
+        assert!(!world.contains_resource::<StarSim>());
+        // Rebuilding the restored sky creates fresh buffers and an uninitialised simulation.
+        world.insert_resource(simulation(0));
+        restore_original(&mut world);
+        let restored = world.resource::<StarSim>();
+        assert_eq!(restored.frames, 1);
+        assert_eq!(restored.stars.stars, expected_stars);
+        assert_eq!(restored.fallback_rng, expected_rng);
+        assert!(!world.contains_resource::<OriginalStars>());
+    }
 
     /// Two sections; the lookup honours section bounds, the type and the entry-point termination rule.
     #[test]
