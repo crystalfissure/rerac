@@ -63,7 +63,7 @@ button, merge the workflow file into the fork's default branch first.
 
 Unzip the downloaded workflow artifact to obtain its inner `rerac-skybox-mod-*.zip`. In ReRAC
 Launcher, use Settings → Version Management → Development → Install from zip and set it
-active. This branch uses version `0.3.3-sky.2` to distinguish it from the upstream build.
+active. This branch uses version `0.3.3-sky.3` to distinguish it from the upstream build.
 Alternatively use Add build folder with an unpacked package in its own folder.
 
 The fork must have GitHub Actions enabled; GitHub may require the owner to enable Actions

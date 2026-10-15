@@ -80,6 +80,8 @@ Load a level and press F5 to open the lighting and fog editor. Changes are live:
 Keep the editor open to use these editing keys. You can also click a row's
 minus, plus, Reset or Level RGB button, or the Compare, Reset all and Close buttons.
 Esc releases the mouse cursor. Gameplay continues while you make changes.
+The mod panels fit smaller windows and use mouse input independently of the
+game render resolution. Resetting a row exits original-comparison mode.
 
 Brightness and the separate red, green and blue controls run from 0% to 200%.
 Shadow lift runs from 0% to 100% and adds light to dark vertex colours. These

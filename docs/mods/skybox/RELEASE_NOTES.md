@@ -1,10 +1,10 @@
-# Skybox Mod 0.2.0-preview.1 — lighting and fog
+# Skybox Mod 0.3.0-preview.1 — mouse controls and UI fixes
 
 An unofficial ReRAC mod that lets you choose another planet's sky and adjust
 level brightness, tint and fog while playing.
 This download includes the modded runtime: no source code or compiler is needed.
 
-Download the **`rerac-skybox-mod-0.2.0-preview.1-windows-x86_64.zip`** asset for
+Download the **`rerac-skybox-mod-0.3.0-preview.1-windows-x86_64.zip`** asset for
 Windows. Extract the complete ZIP, then double-click **Play-Skybox-Mod.cmd**.
 Choose your existing extracted data folder, or let the starter extract your ISO
 into a new empty folder and start the game.
@@ -15,7 +15,7 @@ resolves a missing `VCRUNTIME140.dll` error.
 
 If you already use ReRAC Launcher, you can instead open **Settings → Version
 Management → Development → Install from zip…**, import the ZIP, then **Set active**
-on **ReRAC 0.3.3-sky.2**.
+on **ReRAC 0.3.3-sky.3**.
 Your existing compatible ReRAC game data can be reused. New installations need
 your own supported NTSC-U SCUS_971.99 v1.00 disc image.
 
@@ -23,7 +23,13 @@ Load a level and press **F6**. Choose a sky with **Page Up / Page Down**, apply 
 with **F7**, or restore the original with **F8**. Keep the panel open for F7/F8.
 Sky changes reset when changing levels.
 
-**New: press F5 for lighting and fog.** Use **Home / End** to select a row,
+**Fixed in 0.3:** the mod panels now draw on the window overlay. This fixes mouse
+buttons that could not receive clicks on the game's offscreen render target in 0.2.
+The overlay fits smaller windows and stays independent of the game's render resolution.
+Resetting a lighting/fog row leaves comparison mode so the result is visible.
+Choosing the host planet's sky now restores immediately while a donor is loading.
+
+**Press F5 for lighting and fog.** Use **Home / End** to select a row,
 **[ / ]** to adjust it, and **Delete** to reset it. **F4** compares original
 lighting/fog while keeping your edits; **F3** resets all lighting/fog settings.
 Keep the panel open for editing keys, or use its clickable buttons. Gameplay

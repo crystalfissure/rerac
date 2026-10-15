@@ -35,6 +35,7 @@ try {
 
     Write-Host 'ReRAC Skybox Mod - unofficial preview'
     Write-Host 'In a level: F6 picker, Page Up/Down choose, F7 apply, F8 original.'
+    Write-Host 'F5 lighting/fog editor; F4 compare and F3 reset while the editor is open.'
     $choice = [System.Windows.Forms.MessageBox]::Show(
         "Do you already have extracted ReRAC game data?`n`nYes: choose your existing data folder.`nNo: extract your supported disc ISO into an empty folder.`nCancel: exit.",
         'ReRAC Skybox Mod',

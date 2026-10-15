@@ -1,6 +1,6 @@
 # Lighting and fog mod preview
 
-Mod 0.2.0-preview.1 / runtime 0.3.3-sky.2 adds live appearance controls alongside the
+Mod 0.3.0-preview.1 / runtime 0.3.3-sky.3 adds live appearance controls alongside the
 sky picker. This is a separate preview branch (`work/environment-editor`) based on the
 skybox preview; it does not replace the first skybox-only build.
 
@@ -51,6 +51,9 @@ lighting and fog stay native while the world behind them can retain its edits.
 
 ## Integration
 
+- `mod_ui.rs`: binds both mod panels to the window presentation camera. Bevy UI mouse
+  focus requires a window target; the game camera renders into an image. Fits panels to
+  smaller windows without changing the game camera, HUD, render resolution or draw distances.
 - `environment_mod.rs`: session settings, live panel, comparison, bounded inputs and
   level-unload reset; `RC_ENVIRONMENT_MOD=0` disables it. Deterministic runs disable it
   unless explicitly enabled with `RC_ENVIRONMENT_MOD=1`.
@@ -65,7 +68,7 @@ lighting and fog stay native while the world behind them can retain its edits.
 - `environment_shader_tests.rs`: compiles 27 alpha/blend combinations of the actual WGSL,
   with small typed substitutes for Bevy view imports; no GPU or game assets are required.
 
-## Local validation — 15 October 2026
+## Initial lighting/fog validation — 15 October 2026
 
 - Workspace/all-target type check passed.
 - Workspace/all-target Clippy passed with the existing unrelated trace-tool
@@ -78,6 +81,22 @@ lighting and fog stay native while the world behind them can retain its edits.
   documented in the sky preview review, outside the quick unit tier.
 - Linux Rust 1.99.0, real native dependencies in a temporary sysroot. Test-only dev
   optimisation overrides were restored after running; the shipped build uses release settings.
+
+## Preview 0.3 review fixes — 15 October 2026
+
+- Mod panels target the window presentation camera. Bevy 0.19's `ui_focus_system`
+  ignores image targets, so 0.2's keyboard editor worked but its mouse buttons did not.
+- Panel transforms fit smaller windows while retaining the top-left anchor and native
+  pointer coordinates, independently of the game render resolution.
+- Row reset exits original comparison, matching ordinary adjustment behavior.
+- Selecting the host planet normalizes to Restore before waiting for a donor worker.
+- Local quick suite: **1,049 passed, 0 failed, 3 ignored, 2 filtered** (the same locally
+  unavailable PINE socket tests). Four new regressions include the real Bevy focus
+  system: reproduce the ignored image-target click, retarget, and assert a button press.
+  The overlay layout regression checks Bevy's affine transform, bounds and anchor.
+- Workspace/all-target type check and Clippy passed (only the existing trace-tool
+  needless-borrow warning). The cloud workflow runs the complete unit
+  suite and builds a separate 0.3 draft package before PC visual testing.
 
 ## Validation and PC test pass
 

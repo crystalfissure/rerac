@@ -91,7 +91,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="skybox-v0.2.0-preview.1-${GITHUB_SHA:0:8}"
+          tag="skybox-v0.3.0-preview.1-${GITHUB_SHA:0:8}"
           cp docs/mods/skybox/RELEASE_NOTES.md notes.md
           printf '\nBuilt from commit `%s`.\n' "$GITHUB_SHA" >> notes.md
           if gh release view "$tag" >/dev/null 2>&1; then
@@ -99,7 +99,7 @@ jobs:
           else
             gh release create "$tag" packages/*.zip packages/*.sha256 \
               --target "$GITHUB_SHA" --draft --prerelease \
-              --title "Skybox and Lighting Mod 0.2.0 preview 1 (${GITHUB_SHA:0:8})" \
+              --title "Skybox and Lighting Mod 0.3.0 preview 1 (${GITHUB_SHA:0:8})" \
               --notes-file notes.md
           fi
           echo "Draft preview: https://github.com/$GITHUB_REPOSITORY/releases" >> "$GITHUB_STEP_SUMMARY"

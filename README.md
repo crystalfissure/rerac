@@ -38,10 +38,14 @@ ReRAC data or extract your supported disc ISO. Windows also needs the
 if it is not already installed; this resolves a missing `VCRUNTIME140.dll` error.
 The launcher is optional.
 ReRAC does not yet implement its planned plugin loader, so the package includes a runtime
-with the mod built in. It installs as its own version (`0.3.3-sky.2`) in the launcher's
+with the mod built in. It installs as its own version (`0.3.3-sky.3`) in the launcher's
 Development section. It cannot currently be stacked with other mods that replace the runtime.
 
-**Status: 0.2.0-preview.1, awaiting real-game visual testing.** The
+Preview 0.3 fixes mouse input for the lighting/fog buttons, fits the mod panels to smaller
+windows, makes row resets exit comparison, and restores the host sky immediately while
+another sky is loading.
+
+**Status: 0.3.0-preview.1, awaiting real-game visual testing.** The
 [Skybox and Lighting Mod preview workflow](https://github.com/crystalfissure/rerac/actions/workflows/sky-swapper.yml)
 checks the code and builds the Windows ZIP. Successful builds prepare a draft prerelease for
 the owner to test before sharing. This README does not mean a build has passed or a release

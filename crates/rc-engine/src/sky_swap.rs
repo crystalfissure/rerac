@@ -151,7 +151,7 @@ fn setup_panel(mut commands: Commands) {
         },
         BackgroundColor(Color::srgba(0.025, 0.035, 0.065, 0.94)),
         GlobalZIndex(i32::MAX), Visibility::Hidden,
-        PickerPanel, crate::level_switch::KeepAcrossLevels,
+        PickerPanel, crate::mod_ui::ModOverlay, crate::level_switch::KeepAcrossLevels,
         Name::new("sky picker"),
     )).with_children(|p| {
         p.spawn((Text::new(""), TextFont { font_size: bevy::text::FontSize::Px(16.0), ..default() },
@@ -189,6 +189,10 @@ fn update_picker(world: &mut World, available: bool) {
             if next { p.selected = p.selected.step(1); }
             if apply { p.queued = Some(p.selected); }
             if restore { p.queued = Some(Selection::Original); }
+        }
+        // Choosing the host planet is Restore, including immediate cancellation while a donor loads.
+        if p.queued == Some(Selection::Planet(crate::level_load::level_index())) {
+            p.queued = Some(Selection::Original);
         }
         // A new request supersedes a finished but unapplied old one. Only one worker may run.
         if available && p.queued == Some(Selection::Original) {
@@ -318,6 +322,29 @@ mod tests {
         assert!(p.pending.is_none());
         assert_eq!(p.active, Selection::Original);
         assert_eq!(p.status, "New level");
+    }
+
+    #[test]
+    fn host_selection_restores_without_waiting_for_donor_worker() {
+        let (finish, wait) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let _ = wait.recv();
+            Err(anyhow::anyhow!("cancelled synthetic donor"))
+        });
+        let mut world = picker_world(Picker {
+            active: Selection::Planet(13),
+            queued: Some(Selection::Planet(crate::level_load::level_index())),
+            pending: Some(Pending { generation: 5, source: 3, worker: Mutex::new(Some(worker)) }),
+            ..default()
+        });
+        update_picker(&mut world, true);
+        let p = world.resource::<Picker>();
+        assert_eq!(p.active, Selection::Original);
+        assert!(p.queued.is_none());
+        assert_eq!(p.pending.as_ref().unwrap().generation, u64::MAX);
+        finish.send(()).unwrap();
+        let mut job = world.resource_mut::<Picker>().pending.take().unwrap();
+        let _ = job.worker.get_mut().unwrap().take().unwrap().join();
     }
 
     #[test]

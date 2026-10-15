@@ -125,6 +125,7 @@ impl Editor {
             }
             Action::Reset(row) => {
                 self.selected = row;
+                self.compare_original = false;
                 settings.reset(row);
             }
             Action::Compare => self.compare_original = !self.compare_original,
@@ -177,7 +178,7 @@ fn setup_panel(mut commands: Commands) {
             flex_direction: FlexDirection::Column, row_gap: px(3), ..default()
         },
         BackgroundColor(Color::srgba(0.025, 0.035, 0.065, 0.96)),
-        GlobalZIndex(i32::MAX), Visibility::Hidden, Panel,
+        GlobalZIndex(i32::MAX), Visibility::Hidden, Panel, crate::mod_ui::ModOverlay,
         crate::level_switch::KeepAcrossLevels, Name::new("environment editor"),
     )).with_children(|panel| {
         panel.spawn((Text::new("LEVEL LIGHTING + FOG"),
@@ -370,6 +371,16 @@ mod tests {
         assert_eq!(settings, EnvironmentSettings::default());
         assert!(!editor.compare_original);
         assert!(editor.open);
+    }
+
+    #[test]
+    fn environment_row_reset_leaves_comparison_and_keeps_other_edits() {
+        let mut settings = EnvironmentSettings { brightness: 0.5, tint: Vec3::splat(0.75), ..default() };
+        let mut editor = Editor { compare_original: true, ..default() };
+        editor.apply(Action::Reset(Row::Brightness), &mut settings, [0; 3]);
+        assert!(!editor.compare_original, "make the reset visible, like any other edit");
+        assert_eq!(settings.brightness, 1.0);
+        assert_eq!(settings.tint, Vec3::splat(0.75));
     }
 
     #[test]
