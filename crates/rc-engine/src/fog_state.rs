@@ -203,6 +203,7 @@ fn update_fog_state(
     water: Option<Res<crate::water_render::WaterState>>,
     mut play: Option<ResMut<crate::gameplay::Play>>,
     travel: Option<Res<crate::travel_render::Travel>>,
+    environment: Option<Res<crate::environment_mod::EnvironmentSettings>>,
     cams: MainCamera,
 ) {
     let Some(mut state) = state else { return };
@@ -214,9 +215,13 @@ fn update_fog_state(
     // A level transition's loops do not run UpdateFog: its own fog block stays (fog_zones::TRANSITION_FOG / FLIGHT_FOG).
     if let Some(f) = travel.as_deref().and_then(|t| t.transition_fog()) { view = f; }
     let view = LevelFog::from_globals(&view);
-    if game_fog.fog != view || game_fog.particle_far12 != far12 { *game_fog = GameFog::new(view, far12); }
+    // Keep native fog for tfrag LOD (a zero visual fog slope would make its morph constants singular),
+    // particle culling and game globals. Ties use this display copy only for their per-instance F value.
+    let display = environment.map_or(view, |e| e.fog.apply(view, e.active));
+    let want = GameFog::with_visual_fog(view, display, far12);
+    if *game_fog != want { *game_fog = want; }
     if let Some(mut tie) = tie {
-        if tie.fog != view { tie.fog = view; }
+        if tie.fog != display { tie.fog = display; }
     }
 
     // 2. Camera update: underwater test, then the fog zones.
@@ -313,5 +318,47 @@ fn camera_path(path: Res<CamPath>, frame: Res<FrameNumber>, mut cams: Query<&mut
     let (eye, target) = (lerp(path.from.0, path.to.0), lerp(path.from.1, path.to.1));
     for mut t in &mut cams {
         *t = Transform::from_translation(game_to_bevy(eye)).looking_at(game_to_bevy(target), Vec3::Y);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+    use crate::environment_mod::EnvironmentSettings;
+    use crate::game_camera::{FogOverride, TfragFog};
+
+    #[test]
+    fn environment_fog_system_keeps_game_state_and_restores_live_zone() {
+        let native = LevelFog { color: [105, 127, 180], near_dist: 0.0, far_dist: 245760.0, near_intensity: 255.0, far_intensity: 102.0 };
+        let mut world = World::new();
+        world.insert_resource(FogState::new(FogLevelData { zones: default(), lights: default(), mesh: None }, &native));
+        world.insert_resource(GameFog::new(native, fog_zones::PARTICLE_FAR12));
+        let mut buffers = Assets::<bevy::render::storage::ShaderBuffer>::default();
+        world.insert_resource(crate::tie_lod::TieLodState::new(vec![], vec![], native, &mut buffers));
+        let control = FogOverride { strength: 0.0, distance: 2.0, color: Some([10, 20, 30]) };
+        world.insert_resource(EnvironmentSettings { fog: control, active: true, ..default() });
+        world.run_system_once(update_fog_state).unwrap();
+        let display = control.apply(native, true);
+        assert_eq!(world.resource::<GameFog>().fog, native);
+        assert_eq!(world.resource::<GameFog>().uniform, TfragFog::new(&display));
+        assert_eq!(world.resource::<GameFog>().particle_far12, fog_zones::PARTICLE_FAR12);
+        assert_eq!(world.resource::<crate::tie_lod::TieLodState>().fog, display);
+        assert_eq!(world.resource::<FogState>().level, native.globals());
+
+        // A live zone update remains authoritative; bypass and resource removal both restore it.
+        let zone = LevelFog { color: [20, 60, 80], far_dist: 131072.0, ..native };
+        world.resource_mut::<FogState>().level = zone.globals();
+        world.resource_mut::<EnvironmentSettings>().active = false;
+        world.run_system_once(update_fog_state).unwrap();
+        assert_eq!(*world.resource::<GameFog>(), GameFog::new(zone, fog_zones::PARTICLE_FAR12));
+        assert_eq!(world.resource::<crate::tie_lod::TieLodState>().fog, zone);
+        world.resource_mut::<EnvironmentSettings>().active = true;
+        world.run_system_once(update_fog_state).unwrap();
+        assert_eq!(world.resource::<GameFog>().uniform, TfragFog::new(&control.apply(zone, true)));
+        world.remove_resource::<EnvironmentSettings>();
+        world.run_system_once(update_fog_state).unwrap();
+        assert_eq!(*world.resource::<GameFog>(), GameFog::new(zone, fog_zones::PARTICLE_FAR12));
+        assert_eq!(world.resource::<FogState>().level, zone.globals());
     }
 }

@@ -735,7 +735,7 @@ fn update(
         }
         let lights = rt.bank.as_ref().map(|bank| moby_light::moby_lights(&pl.rows, bank, frame::LIGHT_WORD, frame::AMBIENT, 0x80));
         let model = fold * moby_render::extra_model(rows_f32(&pl.rows), p.scale, pl.pos);
-        let r = moby_render::extra_record(&model, lights.as_ref(), p.base);
+        let r = moby_render::extra_ui_record(&model, lights.as_ref(), p.base);
         let o = k * moby_render::EXTRA_RECORD_SIZE;
         if let Some(d) = records.get_mut(o..o + r.len()) { d.copy_from_slice(&r); }
         let t = Transform::from_matrix(model);

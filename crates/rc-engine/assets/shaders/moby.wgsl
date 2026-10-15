@@ -28,11 +28,21 @@
 #import rerac::display_blend::gs_add
 #endif
 
+#import rerac::world_lights::environment_vertex_color
+
 struct MobyFog {
     // rgb = FOGCOL (display-encoded 0..1), w = 1 when fog is enabled.
     color: vec4<f32>,
     // (slope per integer unit of depth, offset qw661.w, lower clamp qw656.y, upper clamp qw656.z).
     params: vec4<f32>,
+    // Shared buffer reserves the texture option before mod lighting.
+    tex_mode: vec4<f32>,
+    // Environment mod: RGB scale and enabled flag, then RGB additive lift.
+    light_mul: vec4<f32>,
+    light_add: vec4<f32>,
+    // Native fog for menu/vendor models while the world behind them keeps edited fog.
+    native_color: vec4<f32>,
+    native_params: vec4<f32>,
 }
 
 struct MobyInst {
@@ -46,7 +56,8 @@ struct MobyInst {
     neg_k: vec4<f32>,
     // Ambient r, g, b and alpha as colour counts (0..255).
     ambient: vec4<f32>,
-    // x = first palette slot, y = colour mode (0 GPU light, 1 CPU table, 2 unlit), z = CPU colour base.
+    // x = first palette slot, y low byte = colour mode (0 GPU light, 1 CPU table, 2 unlit),
+    // y bit31 = UI model excluded from environment lighting, z = CPU colour base.
     misc: vec4<u32>,
 }
 
@@ -87,6 +98,8 @@ struct MobyVertexOutput {
     @location(1) @interpolate(linear) color: vec4<f32>,
     // GS F / 255, screen-space linear like the GS.
     @location(2) @interpolate(linear) fog: f32,
+    // UI opt-out follows the complete triangle into the fragment's fog-colour selection.
+    @location(3) @interpolate(flat) native_fog: u32,
 }
 
 fn s16(x: i32) -> i32 { return (x << 16u) >> 16u; }
@@ -99,6 +112,7 @@ fn vertex(v: MobyVertex) -> MobyVertexOutput {
     let lod = &lods[tag];
     let base = (*inst).misc.x;
     let alpha = f32((*lod).misc.x);
+    out.native_fog = ((*inst).misc.y >> 31u) & 1u;
 
     // Blended joint matrix (weights are /256; every blend on the disc sums to 256). Count 0: a low-LOD list
     // drawn with job joint count 0, for which MobyAnimEval only writes the identity (moby_render build_parts).
@@ -125,7 +139,7 @@ fn vertex(v: MobyVertex) -> MobyVertexOutput {
     let scroll = (*inst).misc.w;
     out.uv = v.uv + vec2<f32>(f32(s16(i32(scroll & 0xffffu))), f32(s16(i32(scroll >> 16u)))) / 4096.0;
 
-    let mode = (*inst).misc.y;
+    let mode = (*inst).misc.y & 0xffu;
     if (mode == 1u) {
         out.color = unpack4x8unorm(cpu_colors[(*inst).misc.z + v.vid]) * (255.0 / 128.0);
         out.color.a = alpha / 128.0;
@@ -156,10 +170,16 @@ fn vertex(v: MobyVertex) -> MobyVertexOutput {
         out.color = vec4<f32>(out.color.r * 0.5 + 1.0, out.color.gb * 0.3, out.color.a);
     }
 
+    // Menu/vendor model records opt out even when the world behind them is tinted.
+    if (out.native_fog == 0u) {
+        out.color = environment_vertex_color(out.color, fog.light_mul, fog.light_add);
+    }
+
     // Camera-space depth in the game's integer units (Bevy view space looks down -z, game units).
     let depth = -position_world_to_view(world).z * 1024.0;
     // VU: w = depth * slope (the w row of the matrix), += qw661.w, min qw656.z, max qw656.y, ftoi4.
-    let fg = max(min(depth * fog.params.x + fog.params.y, fog.params.w), fog.params.z);
+    let fp = select(fog.params, fog.native_params, out.native_fog != 0u);
+    let fg = max(min(depth * fp.x + fp.y, fp.w), fp.z);
     out.fog = trunc(fg) / 255.0;
     return out;
 }
@@ -174,8 +194,9 @@ fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
 fn fragment(in: MobyVertexOutput) -> @location(0) vec4<f32> {
     let t = textureSample(tex, tex_sampler, in.uv);
     var rgb = min(t.rgb * in.color.rgb, vec3<f32>(1.0));
-    if (fog.color.w > 0.5) {
-        rgb = mix(fog.color.rgb, rgb, in.fog);
+    let fc = select(fog.color, fog.native_color, in.native_fog != 0u);
+    if (fc.w > 0.5) {
+        rgb = mix(fc.rgb, rgb, in.fog);
     }
     // As = (At * Af) >> 7 in GS units (At raw 0..0x80, Af 0x80 = 1.0), clamped to 0xff; FGE leaves it alone.
     let a_s = min(floor(round(t.a * 255.0) * round(in.color.a * 128.0) / 128.0), 255.0);

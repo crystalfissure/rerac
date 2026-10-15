@@ -38,6 +38,10 @@ mod disc_source;
 mod fly_cam;
 mod fx_draw;
 mod fog_state;
+mod environment_mod;
+mod mod_ui;
+#[cfg(test)]
+mod environment_shader_tests;
 mod screen_tint;
 mod game_camera;
 mod gameplay;
@@ -207,6 +211,8 @@ fn main() -> anyhow::Result<()> {
     .add_plugins(reactive_render::ReactivePlugin)
     .add_plugins(sky_stars::SkyStarsPlugin)
     .add_plugins(sky_swap::SkySwapPlugin)
+    .add_plugins(environment_mod::EnvironmentPlugin)
+    .add_plugins(mod_ui::ModUiPlugin)
     .add_plugins(fog_state::FogStatePlugin)
     .add_plugins(screen_tint::ScreenTintPlugin)
     .add_plugins(visibomb_view::VisibombViewPlugin)

@@ -1,8 +1,9 @@
 # Skybox Mod implementation
 
 This branch adds a live sky picker to ReRAC. It changes only the current level's sky;
-lighting, fog, background clear colour, geometry, collision and game progress stay with
-the host level. Original disc files are never overwritten. Settings are session-only and
+the sky picker itself leaves lighting, fog, background clear colour, geometry, collision and
+game progress with the host level. This branch also includes the independent
+[lighting/fog editor](environment-mod.md). Original disc files are never overwritten. Settings are session-only and
 reset to the original sky on a level change.
 
 ## Controls
@@ -47,8 +48,8 @@ manifest contract, and wraps them with the player guide and ISC license. It incl
 game data. This is a compiled mod edition: the planned dynamic plugin loader in upstream
 `docs/plan/mods.md` is not implemented. Players need no compiler or source checkout.
 
-Push `work/skybox-swapper` to the fork to trigger **Skybox Mod preview**.
-The workflow type-checks, lints, and runs sky unit tests on Linux, then builds a Windows
+Push `work/environment-editor` to the fork to trigger **Skybox and Lighting Mod preview**.
+The workflow type-checks, lints, and runs the unit and shader tests on Linux, then builds a Windows
 ZIP in a separate job. The workspace trace tools use Unix sockets and cannot be included
 in the Windows workspace checks; the Windows release build checks the actual shipped
 runtime and extractor. Successful jobs prepare a **draft prerelease** on
@@ -56,13 +57,13 @@ runtime and extractor. Successful jobs prepare a **draft prerelease** on
 before publishing that draft. It is not an automatic public release.
 
 Manual reruns are also supported under
-**Actions → Skybox Mod preview → Run workflow**, selecting this branch.
+**Actions → Skybox and Lighting Mod preview → Run workflow**, selecting this branch.
 If GitHub requires the workflow to exist on the default branch before showing its manual
 button, merge the workflow file into the fork's default branch first.
 
 Unzip the downloaded workflow artifact to obtain its inner `rerac-skybox-mod-*.zip`. In ReRAC
 Launcher, use Settings → Version Management → Development → Install from zip and set it
-active. This branch uses version `0.3.3-sky.1` to distinguish it from the upstream build.
+active. This branch uses version `0.3.3-sky.3` to distinguish it from the upstream build.
 Alternatively use Add build folder with an unpacked package in its own folder.
 
 The fork must have GitHub Actions enabled; GitHub may require the owner to enable Actions
@@ -112,4 +113,5 @@ OpenRAC reference: `OpenRAC/rac1-decomp` commit
 It corroborates the shell/texture/relocation model, but targets PAL v2.00. No OpenRAC
 implementation was copied into this Rust change; existing ReRAC parsers/renderers are reused.
 
-Next phase: saved planet presets, a richer selector, and separate lighting/fog controls.
+Lighting/fog controls are now implemented in the separate F5 panel. Future work includes
+saved planet presets and a richer sky selector, after the previews have been tested in game.

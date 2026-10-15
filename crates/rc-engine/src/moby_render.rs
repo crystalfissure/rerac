@@ -94,10 +94,13 @@ pub const SKIN_GLOW: u32 = 1 << 24;
 /// Per vertex: index of the (packet, vertex) in the class's high-LOD list (CPU colour table index).
 pub const ATTRIBUTE_MOBY_VID: MeshVertexAttribute = MeshVertexAttribute::new("MobyVid", 0x4d4f_4232, VertexFormat::Uint32);
 
-/// Colour modes in `MobyInst.misc.y`.
+/// Colour modes in `MobyInst.misc.y`'s low byte.
 const MODE_GPU_LIGHT: u32 = 0;
 const MODE_CPU_TABLE: u32 = 1;
 const MODE_UNLIT: u32 = 2;
+/// UI models retain their native lighting and fog while the world behind a menu is edited.
+/// Uses an unused bit in the existing record, keeping material bindings/draw order unchanged.
+const NO_ENV_LIGHT: u32 = 1 << 31;
 
 /// Texture key of texture −1 packets: the reserved 8×8 texture at GS block 0x3ffb that `init_once` fills with
 /// 0x80808080 (docs/plan/moby_untextured.md).
@@ -917,7 +920,7 @@ fn build_metal_parts(class: &LevelMobyClass, meshes: &mut Assets<Mesh>) -> (Vec<
 fn axes() -> Mat3 { Mat3::from_cols(Vec3::X, Vec3::NEG_Z, Vec3::Y) }
 
 /// `MobyInst` (moby.wgsl): model (16 f32), light rows (3 vec4), light colours (3 vec4), −|K|, ambient,
-/// misc (u32: palette base, colour mode, CPU colour base, 0). 208 bytes.
+/// misc (u32: palette base, colour mode + UI flag, CPU colour base, UV scroll). 208 bytes.
 fn write_record(out: &mut Vec<u8>, model: &Mat4, g: &GpuLights, misc: [u32; 4]) {
     for v in model.to_cols_array() { out.extend_from_slice(&v.to_le_bytes()); }
     for r in g.rows.iter().chain(&g.colors).chain([&g.neg_k, &g.ambient]) {
@@ -1538,6 +1541,29 @@ pub fn update_moby_occlusion(
 mod tests {
     use super::*;
 
+    #[test]
+    fn environment_ui_record_preserves_native_lighting_and_placement() {
+        let lights = MobyLights {
+            rows: [[0; 4]; 3],
+            colors: [[0; 4]; 3],
+            neg_k: [0, 0, 0, 1.0f32.to_bits()],
+            ambient: [0x47800020, 0x47800040, 0x47800060, 0x47800080],
+        };
+        let model = Mat4::from_translation(Vec3::new(4.0, 5.0, 6.0));
+        for lighting in [None, Some(&lights)] {
+            let world = extra_record(&model, lighting, 17);
+            let mut ui = extra_ui_record(&model, lighting, 17);
+            let at = RECORD_SIZE - 12;
+            let mode = u32::from_le_bytes(ui[at..at + 4].try_into().unwrap());
+            assert_ne!(mode & NO_ENV_LIGHT, 0);
+            assert_eq!(mode & 0xff, if lighting.is_some() { MODE_GPU_LIGHT } else { MODE_UNLIT });
+            // Only the opt-out flag may differ: alpha, lights, transform, palette and UV scroll
+            // remain byte-identical. Shader mode decoding removes this flag before lighting.
+            ui[at..at + 4].copy_from_slice(&(mode & !NO_ENV_LIGHT).to_le_bytes());
+            assert_eq!(ui, world);
+        }
+    }
+
     type P = [f64; 3];
     fn sub(a: P, b: P) -> P { [a[0] - b[0], a[1] - b[1], a[2] - b[2]] }
     fn cross(a: P, b: P) -> P { [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]] }
@@ -1757,6 +1783,15 @@ pub fn extra_record(model: &Mat4, lights: Option<&MobyLights>, palette_base: u32
     let mut out = Vec::with_capacity(RECORD_SIZE);
     let mode = if lights.is_some() { MODE_GPU_LIGHT } else { MODE_UNLIT };
     write_record(&mut out, model, &lights.map(GpuLights::new).unwrap_or_default(), [palette_base, mode, 0, 0]);
+    out
+}
+
+/// A menu or vendor-preview model. Base and metal passes keep native lighting and native fog.
+pub fn extra_ui_record(model: &Mat4, lights: Option<&MobyLights>, palette_base: u32) -> Vec<u8> {
+    let mut out = extra_record(model, lights, palette_base);
+    let at = RECORD_SIZE - 12; // misc.y, after the palette base
+    let mode = u32::from_le_bytes(out[at..at + 4].try_into().unwrap());
+    out[at..at + 4].copy_from_slice(&(mode | NO_ENV_LIGHT).to_le_bytes());
     out
 }
 

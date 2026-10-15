@@ -205,6 +205,8 @@ struct Group {
     /// `None`: an opaque world surface; `Some(blend)`: a display-blend effect.
     effect: Option<Blend>,
     fog: TfragFog,
+    /// Refresh from GameFog between ticks; false preserves a grid record's own local fog.
+    level_fog: bool,
     bias: f32,
     prims: PrimBuf,
 }
@@ -352,29 +354,30 @@ fn strip_prims(strips: &[rc_formats::sea::StripMesh], scroll: [f32; 2], alpha: O
 /// strip passes). `grid` = the port's grid image, FIX and fog for a [`gs::MeshTex::Grid`] pass; `anim` makes an
 /// animated image for this tick (false: its frames are missing, the pass is skipped).
 #[allow(clippy::too_many_arguments)]
-fn mesh_set_groups(groups: &mut Vec<Group>, set: &gs::MeshSet, counter: u64, cam: [f32; 3], view: &rc_game::particles::BSphereView, bias: f32, level_fog: TfragFog, grid: Option<(GridAnim, u8, TfragFog)>, scroll: [f32; 2], anim: &mut dyn FnMut(GridAnim) -> bool) {
+fn mesh_set_groups(groups: &mut Vec<Group>, set: &gs::MeshSet, counter: u64, cam: [f32; 3], view: &rc_game::particles::BSphereView, bias: f32, level_fog: TfragFog, grid: Option<(GridAnim, u8, TfragFog, bool)>, scroll: [f32; 2], anim: &mut dyn FnMut(GridAnim) -> bool) {
     for (j, pass) in set.passes.iter().enumerate() {
-        let (tex, fix, fog) = match pass.tex {
-            gs::MeshTex::Fx(n) => (Tex::Fx(n as usize, pass.fix < 0x80), pass.fix, level_fog),
+        let (tex, fix, fog, follows_level) = match pass.tex {
+            gs::MeshTex::Fx(n) => (Tex::Fx(n as usize, pass.fix < 0x80), pass.fix, level_fog, true),
             gs::MeshTex::Anim(a) => {
                 if !anim(a) { continue; }
-                (Tex::Anim(a), pass.fix, level_fog)
+                (Tex::Anim(a), pass.fix, level_fog, true)
             }
             gs::MeshTex::Grid => {
-                let Some((a, fix, fog)) = grid else { continue };
-                (Tex::Anim(a), fix, fog)
+                let Some((a, fix, fog, follows_level)) = grid else { continue };
+                (Tex::Anim(a), fix, fog, follows_level)
             }
         };
         let opaque = fix >= 0x80 || (matches!(pass.tex, gs::MeshTex::Grid) && fix >= 0x61);
         let prims = mesh_prims(set, pass, counter, cam, Some(view), if opaque { 0x80 } else { fix }, scroll);
-        groups.push(Group { tex, effect: (!opaque).then_some(Blend::Mix), fog, bias: bias + j as f32 * 0.25, prims });
+        groups.push(Group { tex, effect: (!opaque).then_some(Blend::Mix), fog, level_fog: follows_level, bias: bias + j as f32 * 0.25, prims });
     }
 }
 
 // ---------------------------------------------------------------------------------------------------
 // Bevy
 
-type Slot = (Entity, Handle<Mesh>, Handle<FxPrimMaterial>, bool);
+/// Entity, geometry, material, visible, follows level fog (rather than a liquid record's local fog).
+type Slot = (Entity, Handle<Mesh>, Handle<FxPrimMaterial>, bool, bool);
 
 #[derive(Resource, Default)]
 struct SeaDraw {
@@ -383,6 +386,24 @@ struct SeaDraw {
     anim_images: HashMap<GridAnim, Handle<Image>>,
     drawn: Option<u64>,
     pixels: Vec<u8>,
+    fog: Option<TfragFog>,
+}
+
+impl SeaDraw {
+    /// Fog changes affect cached materials even while the animation counter is frozen. Local grid fog
+    /// stays native, and a fog-only update never regenerates meshes or advances animated textures.
+    fn prepare_draw(&mut self, counter: u64, fog: TfragFog, materials: &mut Assets<FxPrimMaterial>) -> bool {
+        if self.fog != Some(fog) {
+            self.fog = Some(fog);
+            for (_, _, mat, _, follows_level) in self.slots.iter().flatten() {
+                if !follows_level { continue; }
+                if let Some(mut material) = materials.get_mut(mat) { material.fog = fog; }
+            }
+        }
+        if self.drawn == Some(counter) { return false; }
+        self.drawn = Some(counter);
+        true
+    }
 }
 
 pub struct SeaRenderPlugin;
@@ -390,7 +411,8 @@ pub struct SeaRenderPlugin;
 impl Plugin for SeaRenderPlugin {
     fn build(&self, app: &mut App) {
         if !enabled() { return; }
-        app.init_resource::<SeaDraw>().add_systems(crate::level_switch::LevelUnload, crate::level_switch::reset::<SeaDraw>).add_systems(PostUpdate, draw.before(bevy::asset::AssetEventSystems));
+        app.init_resource::<SeaDraw>().add_systems(crate::level_switch::LevelUnload, crate::level_switch::reset::<SeaDraw>)
+            .add_systems(PostUpdate, draw.after(crate::fog_state::FogSet).before(bevy::asset::AssetEventSystems));
     }
 }
 
@@ -439,9 +461,8 @@ fn draw(
     let Some(p) = play.as_deref() else { return };
     let Some(cam_t) = cams.iter().next() else { return };
     let counter = p.game.counter;
-    if st.drawn == Some(counter) { return; }
-    st.drawn = Some(counter);
     let level_fog = fog.map(|f| f.uniform).unwrap_or_else(|| TfragFog::new(&level.0.fog));
+    if !st.prepare_draw(counter, level_fog, &mut materials) { return; }
     let missile = crate::visibomb_view::missile_view(play.as_deref());
     let cam = game_eye(cam_t).to_array();
     let to_game = |v: Vec3| [v.x, -v.z, v.y];
@@ -492,26 +513,26 @@ fn draw(
                 let grid_fog = if missile { level_fog } else { TfragFog::new(&lf) };
                 let opaque = run.fix >= 0x61;
                 let prims = grid_prims(&g.grid, &g.module, gp.scale, run.z, if opaque { 0x80 } else { run.fix }, cam);
-                groups.push(Group { tex: Tex::Anim(ga), effect: (!opaque).then_some(Blend::Mix), fog: grid_fog, bias, prims });
+                groups.push(Group { tex: Tex::Anim(ga), effect: (!opaque).then_some(Blend::Mix), fog: grid_fog, level_fog: missile, bias, prims });
                 // Level 9's lava meshes (317's callback `0x2ef750`): the flows before the grid, the grid-textured ones
                 // after it with its image, fog and FIX.
                 for (j, set) in g.extras.iter().enumerate() {
                     let b = if set.before_grid { bias - 1.0 - j as f32 } else { bias + 1.0 + j as f32 };
-                    mesh_set_groups(&mut groups, set, counter, cam, &view, b, level_fog, Some((ga, run.fix, grid_fog)), [0.0; 2], &mut |a| anim(a, st, &mut images));
+                    mesh_set_groups(&mut groups, set, counter, cam, &view, b, level_fog, Some((ga, run.fix, grid_fog, missile)), [0.0; 2], &mut |a| anim(a, st, &mut images));
                 }
             }
             (SeaKind::Ocean, SeaData::Ocean(t)) => {
                 if m.pvars.len() < 0x30 { continue; }
                 for (j, (fxi, additive, prims)) in ocean_groups(&m.pvars, run, t, cam, rows).into_iter().enumerate() {
-                    groups.push(Group { tex: Tex::Fx(fxi, false), effect: Some(Blend::of(additive)), fog: level_fog, bias: bias + j as f32 * 0.25, prims });
+                    groups.push(Group { tex: Tex::Fx(fxi, false), effect: Some(Blend::of(additive)), fog: level_fog, level_fog: true, bias: bias + j as f32 * 0.25, prims });
                 }
             }
             (SeaKind::Hoven, SeaData::Hoven(h)) => {
                 if gs::hoven_group1_drawn(&m.pvars, &p.svc.volumes, cam) {
-                    groups.push(Group { tex: Tex::Fx(HOVEN_G1_FX, false), effect: None, fog: level_fog, bias, prims: strip_prims(&h.groups[0], run.g1_scroll, None) });
+                    groups.push(Group { tex: Tex::Fx(HOVEN_G1_FX, false), effect: None, fog: level_fog, level_fog: true, bias, prims: strip_prims(&h.groups[0], run.g1_scroll, None) });
                 }
-                groups.push(Group { tex: Tex::Fx(HOVEN_FX[0], false), effect: None, fog: level_fog, bias: bias + 1.0, prims: strip_prims(&h.groups[1], run.scroll[0], None) });
-                groups.push(Group { tex: Tex::Fx(HOVEN_FX[1], true), effect: Some(Blend::Add), fog: level_fog, bias: bias + 2.0, prims: strip_prims(&h.groups[1], run.scroll[1], Some(h.fix2)) });
+                groups.push(Group { tex: Tex::Fx(HOVEN_FX[0], false), effect: None, fog: level_fog, level_fog: true, bias: bias + 1.0, prims: strip_prims(&h.groups[1], run.scroll[0], None) });
+                groups.push(Group { tex: Tex::Fx(HOVEN_FX[1], true), effect: Some(Blend::Add), fog: level_fog, level_fog: true, bias: bias + 2.0, prims: strip_prims(&h.groups[1], run.scroll[1], Some(h.fix2)) });
             }
             (SeaKind::GridSet, SeaData::GridSet(g)) => {
                 // 854's callback `0x2ea048`: the shared image and fog (`0x2a4818`), the gated records, the fog restore.
@@ -524,7 +545,7 @@ fn draw(
                 }
                 let lf = LevelFog { color: g.fog_rgb, near_dist: g.fog[0], far_dist: g.fog[1], near_intensity: g.fog[2], far_intensity: g.fog[3] };
                 // (`0x2a4818` has no Visibomb-view branch: the record's fog always.)
-                groups.push(Group { tex: Tex::Anim(g.anim), effect: (!opaque).then_some(Blend::Mix), fog: TfragFog::new(&lf), bias, prims });
+                groups.push(Group { tex: Tex::Anim(g.anim), effect: (!opaque).then_some(Blend::Mix), fog: TfragFog::new(&lf), level_fog: false, bias, prims });
             }
             (SeaKind::Pool(pm), SeaData::Pool(d)) => {
                 // 1903 / 1919's callbacks `0x31db50` / `0x31e930` (rc_game::water::sea::pool_ref): L0 (with the shimmer's
@@ -546,7 +567,7 @@ fn draw(
                 for k in 0..2 { passes.push((Tex::Fx(tex[2], false), Blend::Add, strip_prims(&d.layers[1], pr.l1[k], None))); }
                 if full { passes.push((Tex::Fx(tex[3], false), Blend::Add, strip_prims(&d.layers[2], pr.l2, None))); }
                 for (j, (t, b, prims)) in passes.into_iter().enumerate() {
-                    groups.push(Group { tex: t, effect: Some(b), fog: level_fog, bias: bias + j as f32 * 0.25, prims });
+                    groups.push(Group { tex: t, effect: Some(b), fog: level_fog, level_fog: true, bias: bias + j as f32 * 0.25, prims });
                 }
             }
             (SeaKind::TwoTex(_) | SeaKind::EnvOverlay | SeaKind::Reflect(_), SeaData::Meshes(set)) => {
@@ -569,7 +590,8 @@ fn draw(
         };
         let params = match g.effect { None => FxPrimParams::opaque(), Some(Blend::Sub) => FxPrimParams::subtract(), Some(b) => FxPrimParams::blend(b == Blend::Add) };
         let effect = g.effect.is_some();
-        if let Some((e, mesh, mat, shown)) = &mut st.slots[k] {
+        if let Some((e, mesh, mat, shown, follows_level)) = &mut st.slots[k] {
+            *follows_level = g.level_fog;
             g.prims.update(&mut meshes, mesh);
             let need = materials.get(&*mat).is_none_or(|m| m.texture != img || m.params.misc != params.misc || m.fog != g.fog || m.order != g.bias);
             if need {
@@ -594,13 +616,13 @@ fn draw(
         let mat = materials.add(FxPrimMaterial { texture: img, fog: g.fog, params, order: g.bias });
         let mut ec = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(mat.clone()), Transform::IDENTITY, NoFrustumCulling, Visibility::Inherited, Name::new(format!("sea draw {k}"))));
         if effect { ec.insert(DisplayEffect); }
-        st.slots[k] = Some((ec.id(), mesh, mat, true));
+        st.slots[k] = Some((ec.id(), mesh, mat, true, g.level_fog));
     }
     for s in st.slots.iter_mut().skip(n) { hide(&mut vis, s); }
 }
 
 fn hide(vis: &mut Query<&mut Visibility>, s: &mut Option<Slot>) {
-    let Some((e, _, _, shown)) = s else { return };
+    let Some((e, _, _, shown, _)) = s else { return };
     if !*shown { return; }
     *shown = false;
     if let Ok(mut v) = vis.get_mut(*e) { *v = Visibility::Hidden; }
@@ -609,6 +631,32 @@ fn hide(vis: &mut Query<&mut Visibility>, s: &mut Option<Slot>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn environment_sea_fog_refreshes_while_paused_and_preserves_local_grid_fog() {
+        let original = TfragFog { color: Vec4::ONE, params: Vec4::new(-0.1, 255.0, 100.0, 255.0) };
+        let edited = TfragFog { color: Vec4::new(0.2, 0.4, 0.8, 1.0), params: Vec4::new(0.0, 255.0, 255.0, 255.0) };
+        let local = TfragFog { color: Vec4::new(0.7, 0.3, 0.1, 1.0), ..original };
+        let mut materials = Assets::<FxPrimMaterial>::default();
+        let level_mat = materials.add(FxPrimMaterial { texture: default(), fog: original, params: FxPrimParams::opaque(), order: 1.0 });
+        let local_mat = materials.add(FxPrimMaterial { texture: default(), fog: local, params: FxPrimParams::opaque(), order: 2.0 });
+        let mut world = World::new();
+        let mut state = SeaDraw {
+            slots: vec![Some((world.spawn_empty().id(), default(), level_mat.clone(), true, true)),
+                Some((world.spawn_empty().id(), default(), local_mat.clone(), true, false))],
+            drawn: Some(50), fog: Some(original), pixels: vec![1, 2, 3, 4], ..default()
+        };
+        assert!(!state.prepare_draw(50, edited, &mut materials), "fog-only edit must not regenerate animation or meshes");
+        assert_eq!(materials.get(&level_mat).unwrap().fog, edited);
+        assert_eq!(materials.get(&local_mat).unwrap().fog, local);
+        assert_eq!(state.drawn, Some(50));
+        assert_eq!(state.pixels, [1, 2, 3, 4]);
+        assert!(!state.prepare_draw(50, original, &mut materials));
+        assert_eq!(materials.get(&level_mat).unwrap().fog, original);
+        assert_eq!(materials.get(&local_mat).unwrap().fog, local);
+        assert!(state.prepare_draw(51, original, &mut materials));
+        assert!(!state.prepare_draw(51, original, &mut materials), "one draw per animation tick");
+    }
 
     #[test]
     fn tween_is_per_byte_and_truncates() {

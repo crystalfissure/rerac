@@ -55,9 +55,10 @@ pub struct GameCameraPlugin {
 /// fog values, the tfrag LOD constants (`SetTfragDists`) and the particle cull.
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
 pub struct GameFog {
-    /// View-context fog (0x16d0d8..0x16d0f8).
+    /// Original view-context fog (0x16d0d8..0x16d0f8), retained for LOD and diagnostics.
+    /// Visual mod controls never change this or the particle clipping distance.
     pub fog: LevelFog,
-    /// The material uniform built from `fog` (`TfragFog::new`, honours `RC_FOG=0`).
+    /// The displayed fog (`TfragFog::new`, honours `RC_FOG=0`), including visual mod controls.
     pub uniform: TfragFog,
     /// `0x16017c`: global particle far, 20.12 fixed point (500 units, 64 underwater).
     pub particle_far12: i32,
@@ -65,10 +66,53 @@ pub struct GameFog {
 
 impl GameFog {
     pub fn new(fog: LevelFog, particle_far12: i32) -> Self { GameFog { fog, uniform: TfragFog::new(&fog), particle_far12 } }
+
+    /// Replace only the displayed colour and coefficients, leaving simulation, LOD and culling intact.
+    pub fn with_visual_fog(fog: LevelFog, display: LevelFog, particle_far12: i32) -> Self {
+        GameFog { fog, uniform: TfragFog::new(&display), particle_far12 }
+    }
+}
+
+/// Reversible, relative edits of the current level/zone/underwater fog. The original fog keeps updating,
+/// so restoring these defaults returns to the current game state rather than a stale captured snapshot.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FogOverride {
+    /// Multiplier on fog opacity at the near/far endpoints: 0 clears fog, 1 is original, 2 is strongest.
+    pub strength: f32,
+    /// Multiplier on the original near/far depths: larger values move fog further away.
+    pub distance: f32,
+    /// Display-encoded RGB replacement; None follows the level's dynamic fog colours.
+    pub color: Option<[u8; 3]>,
+}
+
+impl Default for FogOverride {
+    fn default() -> Self { Self { strength: 1.0, distance: 1.0, color: None } }
+}
+
+impl FogOverride {
+    /// Apply only to a copy destined for rendering. Inactive and default controls preserve every bit of
+    /// the native values. Clamps and non-finite fallbacks keep injected/scripted values safe too.
+    pub fn apply(self, native: LevelFog, active: bool) -> LevelFog {
+        if !active || self == Self::default() { return native; }
+        let strength = if self.strength.is_finite() { self.strength.clamp(0.0, 2.0) } else { 1.0 };
+        let distance = if self.distance.is_finite() { self.distance.clamp(0.25, 4.0) } else { 1.0 };
+        let mut display = native;
+        if strength != 1.0 {
+            display.near_intensity = (255.0 - strength * (255.0 - native.near_intensity)).clamp(0.0, 255.0);
+            display.far_intensity = (255.0 - strength * (255.0 - native.far_intensity)).clamp(0.0, 255.0);
+        }
+        if distance != 1.0 {
+            display.near_dist *= distance;
+            display.far_dist *= distance;
+        }
+        if let Some(color) = self.color { display.color = color; }
+        display
+    }
 }
 
 /// The frame's fog ([`GameFog::uniform`]) in one storage buffer every world material binds (tfrags, ties, shrubs,
-/// shrub billboards, mobys and their metal pass: binding 2): a fog change rewrites these 32 bytes instead of every
+/// shrub billboards, mobys and their metal pass: binding 2): fog, graphics and lighting controls share 112 bytes,
+/// so a change rewrites one buffer instead of every
 /// material (a material change makes Bevy rebuild its bind group, thousands of them per frame during a fog
 /// zone's cross-fade).
 static FOG_BUFFER: std::sync::OnceLock<Handle<bevy::render::storage::ShaderBuffer>> = std::sync::OnceLock::new();
@@ -78,17 +122,27 @@ pub fn fog_buffer() -> Handle<bevy::render::storage::ShaderBuffer> { FOG_BUFFER.
 
 /// The fog (colour, params), then the graphics options the world shaders read (crate::graphics; every world material
 /// binds this buffer): `tex_mode.x` the texture option for `sample_world` (0 Original, 1 Smooth, 2 Sharp), `.y` the
-/// Detail distance factor (1 = the game's; the shrub and billboard fade distance).
-fn fog_bytes(f: &TfragFog, g: &crate::graphics::GraphicsSettings) -> Vec<u8> {
+/// Detail distance factor (1 = the game's; the shrub and billboard fade distance). Next come RGB lighting
+/// multiplier + enabled flag, and RGB additive lift + padding (crate::environment_mod). The final two vectors
+/// retain native fog colour/coefficients for pause/vendor models, even while world fog is edited.
+fn fog_bytes(f: &GameFog, g: &crate::graphics::GraphicsSettings, light: (Vec4, Vec4)) -> Vec<u8> {
     use crate::graphics::GfxOption;
     let filter = [g.textures.index() as f32, g.detail.lod_scale(), 0.0, 0.0];
-    f.color.to_array().iter().chain(&f.params.to_array()).chain(&filter).flat_map(|v| v.to_le_bytes()).collect()
+    let native = TfragFog::new(&f.fog);
+    f.uniform.color.to_array().iter().chain(&f.uniform.params.to_array()).chain(&filter)
+        .chain(&light.0.to_array()).chain(&light.1.to_array())
+        .chain(&native.color.to_array()).chain(&native.params.to_array()).flat_map(|v| v.to_le_bytes()).collect()
 }
 
 /// Rewrites the shared fog buffer when the frame's fog or the texture option changes.
-fn upload_fog(fog: Res<GameFog>, gfx: Res<crate::graphics::GraphicsSettings>, mut buffers: ResMut<Assets<bevy::render::storage::ShaderBuffer>>) {
-    if !fog.is_changed() && !gfx.is_changed() { return; }
-    if let Some(h) = FOG_BUFFER.get() { crate::asset_write::set_buffer(&mut buffers, h, &fog_bytes(&fog.uniform, &gfx)); }
+fn upload_fog(
+    fog: Res<GameFog>, gfx: Res<crate::graphics::GraphicsSettings>,
+    environment: Option<Res<crate::environment_mod::EnvironmentSettings>>,
+    mut buffers: ResMut<Assets<bevy::render::storage::ShaderBuffer>>,
+) {
+    if !fog.is_changed() && !gfx.is_changed() && !environment.as_ref().is_some_and(|e| e.is_changed()) { return; }
+    let light = environment.map_or((Vec4::new(1.0, 1.0, 1.0, 0.0), Vec4::ZERO), |e| e.light_uniforms());
+    if let Some(h) = FOG_BUFFER.get() { crate::asset_write::set_buffer(&mut buffers, h, &fog_bytes(&fog, &gfx, light)); }
 }
 
 impl Plugin for GameCameraPlugin {
@@ -100,10 +154,14 @@ impl Plugin for GameCameraPlugin {
             if std::env::var("RC_FOG").is_ok_and(|v| v.trim() == "0") { " (disabled by RC_FOG=0)" } else { "" }
         );
         let fog = GameFog::new(self.fog, rc_game::fog_zones::PARTICLE_FAR12);
-        let buf = bevy::render::storage::ShaderBuffer::new(&fog_bytes(&fog.uniform, &crate::graphics::GraphicsSettings::default()), bevy::asset::RenderAssetUsages::default());
+        let buf = bevy::render::storage::ShaderBuffer::new(
+            &fog_bytes(&fog, &crate::graphics::GraphicsSettings::default(), (Vec4::new(1.0, 1.0, 1.0, 0.0), Vec4::ZERO)),
+            bevy::asset::RenderAssetUsages::default(),
+        );
         let h = app.world_mut().resource_mut::<Assets<bevy::render::storage::ShaderBuffer>>().add(buf);
         let _ = FOG_BUFFER.set(h);
-        app.insert_resource(fog).add_systems(Update, print_game_camera).add_systems(PostUpdate, upload_fog.before(bevy::asset::AssetEventSystems));
+        app.insert_resource(fog).add_systems(Update, print_game_camera)
+            .add_systems(PostUpdate, upload_fog.after(crate::fog_state::FogSet).before(bevy::asset::AssetEventSystems));
     }
 }
 
@@ -413,6 +471,84 @@ mod tests {
 
     const NOVALIS: LevelFog =
         LevelFog { color: [105, 127, 180], near_dist: 0.0, far_dist: 245760.0, near_intensity: 255.0, far_intensity: 102.0 };
+
+    #[test]
+    fn environment_fog_default_and_inactive_are_exact() {
+        let changed = FogOverride { strength: 0.2, distance: 3.0, color: Some([200, 15, 125]) };
+        for native in [NOVALIS, LevelFog { near_dist: 10240.0, near_intensity: 200.0, far_intensity: 15.0, ..NOVALIS }] {
+            assert_eq!(FogOverride::default().apply(native, true), native);
+            assert_eq!(changed.apply(native, false), native);
+        }
+    }
+
+    #[test]
+    fn environment_fog_controls_adjust_opacity_distance_and_colour() {
+        let control = FogOverride { strength: 0.5, distance: 2.0, color: Some([50, 100, 150]) };
+        let display = control.apply(NOVALIS, true);
+        assert_eq!(display.color, [50, 100, 150]);
+        assert_eq!(display.near_intensity, 255.0);
+        assert_eq!(display.far_intensity, 178.5);
+        assert_eq!(display.far_dist, 491520.0);
+        // At the same world depth, pushing the fog further away leaves more of the scene visible.
+        assert!(crate::tie_lod::fog_value(120.0, &display) > crate::tie_lod::fog_value(120.0, &NOVALIS));
+        assert_eq!(NOVALIS.color, [105, 127, 180]);
+    }
+
+    #[test]
+    fn environment_fog_zero_strength_preserves_native_lod_and_particle_cull() {
+        let display = FogOverride { strength: 0.0, ..default() }.apply(NOVALIS, true);
+        for depth in [0.0, 120.0, 240.0, 1000.0] { assert_eq!(crate::tie_lod::fog_value(depth, &display), 255); }
+        let fog = GameFog::with_visual_fog(NOVALIS, display, 1234);
+        assert_eq!(fog.fog, NOVALIS);
+        assert_ne!(fog.fog.vu_terms().1, 0.0, "LOD must keep the native nonzero slope");
+        assert_eq!(fog.uniform.params, Vec4::new(0.0, 255.0, 255.0, 255.0));
+        assert_eq!(fog.particle_far12, 1234);
+    }
+
+    #[test]
+    fn environment_fog_clamps_controls_and_rejects_non_finite_values() {
+        let bright = FogOverride { strength: -20.0, distance: 0.0, color: None }.apply(NOVALIS, true);
+        assert_eq!((bright.near_intensity, bright.far_intensity), (255.0, 255.0));
+        assert_eq!(bright.far_dist, NOVALIS.far_dist * 0.25);
+        let thick = FogOverride { strength: 20.0, distance: 20.0, color: None }.apply(NOVALIS, true);
+        assert_eq!(thick.far_intensity, 0.0);
+        assert_eq!(thick.far_dist, NOVALIS.far_dist * 4.0);
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(FogOverride { strength: bad, distance: bad, color: None }.apply(NOVALIS, true), NOVALIS);
+        }
+    }
+
+    #[test]
+    fn environment_fog_follows_zone_updates_and_restore_uses_current_native_fog() {
+        let zone = LevelFog { color: [20, 60, 80], far_dist: 131072.0, far_intensity: 25.0, ..NOVALIS };
+        let control = FogOverride { strength: 0.5, ..default() };
+        let first = control.apply(NOVALIS, true);
+        let next = control.apply(zone, true);
+        assert_ne!(first, next);
+        assert_eq!(next.color, zone.color);
+        assert_eq!(next.far_dist, zone.far_dist);
+        let reset = GameFog::with_visual_fog(zone, FogOverride::default().apply(zone, true), 42);
+        assert_eq!(reset, GameFog::new(zone, 42));
+    }
+
+    #[test]
+    fn environment_fog_buffer_layout_matches_shader_vectors() {
+        let display = TfragFog { color: Vec4::new(0.1, 0.2, 0.3, 1.0), params: Vec4::new(-0.1, 255.0, 100.0, 255.0) };
+        let fog = GameFog { uniform: display, ..GameFog::new(NOVALIS, 42) };
+        let light = (Vec4::new(0.5, 1.0, 1.5, 1.0), Vec4::new(0.1, 0.1, 0.1, 0.0));
+        let bytes = fog_bytes(&fog, &crate::graphics::GraphicsSettings::default(), light);
+        assert_eq!(bytes.len(), 112);
+        let vector = |offset| Vec4::from_array(std::array::from_fn(|i| f32::from_le_bytes(bytes[offset + i * 4..offset + i * 4 + 4].try_into().unwrap())));
+        assert_eq!(vector(0), display.color);
+        assert_eq!(vector(16), display.params);
+        assert_eq!(vector(48), light.0);
+        assert_eq!(vector(64), light.1);
+        let native = TfragFog::new(&NOVALIS);
+        assert_eq!(vector(80), native.color);
+        assert_eq!(vector(96), native.params);
+        assert_ne!(vector(80), display.color, "menu models must keep native fog colour");
+        assert_ne!(vector(96), display.params, "menu models must keep native fog coefficients");
+    }
 
     /// `set_background_color` packing of level settings +0x00/04/08 (Novalis values), section at pointer 0.
     #[test]

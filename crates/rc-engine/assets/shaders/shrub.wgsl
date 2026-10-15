@@ -33,13 +33,16 @@
     mesh_functions,
     view_transformations::{position_world_to_clip, position_world_to_view},
 }
-#import rerac::world_lights::{WorldLight, NO_LIGHTS, instance_light, instance_lit_packed}
+#import rerac::world_lights::{WorldLight, NO_LIGHTS, instance_light, instance_lit_packed, environment_vertex_color}
 
 struct ShrubFog {
     color: vec4<f32>,
     params: vec4<f32>,
     // x: the texture option (crate::graphics; sample_world).
     tex_mode: vec4<f32>,
+    // Environment mod: RGB scale and enabled flag, then RGB additive lift.
+    light_mul: vec4<f32>,
+    light_add: vec4<f32>,
 }
 
 struct ShrubParams {
@@ -163,7 +166,7 @@ fn vertex(v: ShrubVertex) -> ShrubVertexOutput {
         if (il.hit) { rgba = instance_lit_packed(rgba, il, class_normal((*inst).normals[entry]), (*inst).model, 243.0); }
     }
     let c = unpack4x8unorm(rgba) * (255.0 / 128.0);
-    out.color = vec4<f32>(c.rgb, alpha / 128.0);
+    out.color = environment_vertex_color(vec4<f32>(c.rgb, alpha / 128.0), fog.light_mul, fog.light_add);
     let origin_depth = -position_world_to_view((*inst).origin.xyz).z;
     let fv = min(max(origin_depth * 1024.0 * fog.params.x + fog.params.y, fog.params.z), fog.params.w);
     out.fog = trunc(fv) / 255.0;

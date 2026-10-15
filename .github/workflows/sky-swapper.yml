@@ -1,8 +1,8 @@
-name: Skybox Mod preview
+name: Skybox and Lighting Mod preview
 
 on:
   push:
-    branches: ["work/skybox-swapper"]
+    branches: ["work/environment-editor"]
   workflow_dispatch:
 
 permissions:
@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   checks:
-    name: Sky regression checks (Linux)
+    name: Mod regression checks (Linux)
     runs-on: ubuntu-22.04
     timeout-minutes: 90
     steps:
@@ -32,8 +32,8 @@ jobs:
         run: cargo check-all --locked
       - name: Lints
         run: cargo clippy-all --locked
-      - name: Sky regression tests
-        run: cargo xtask test-quick rc-engine --filter sky_
+      - name: Unit and shader regression tests
+        run: cargo xtask test-quick
 
   windows:
     name: Windows x64 mod package
@@ -77,7 +77,7 @@ jobs:
   preview:
     name: Prepare downloadable preview
     needs: [checks, windows]
-    if: github.repository == 'crystalfissure/rerac' && github.ref == 'refs/heads/work/skybox-swapper'
+    if: github.repository == 'crystalfissure/rerac' && github.ref == 'refs/heads/work/environment-editor'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -91,7 +91,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="skybox-v0.1.0-preview.1-${GITHUB_SHA:0:8}"
+          tag="skybox-v0.3.0-preview.1-${GITHUB_SHA:0:8}"
           cp docs/mods/skybox/RELEASE_NOTES.md notes.md
           printf '\nBuilt from commit `%s`.\n' "$GITHUB_SHA" >> notes.md
           if gh release view "$tag" >/dev/null 2>&1; then
@@ -99,7 +99,7 @@ jobs:
           else
             gh release create "$tag" packages/*.zip packages/*.sha256 \
               --target "$GITHUB_SHA" --draft --prerelease \
-              --title "Skybox Mod 0.1.0 preview 1 (${GITHUB_SHA:0:8})" \
+              --title "Skybox and Lighting Mod 0.3.0 preview 1 (${GITHUB_SHA:0:8})" \
               --notes-file notes.md
           fi
           echo "Draft preview: https://github.com/$GITHUB_REPOSITORY/releases" >> "$GITHUB_STEP_SUMMARY"

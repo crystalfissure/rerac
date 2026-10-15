@@ -49,15 +49,20 @@ the workspace and dependencies to reduce the cost of the cold Bevy build. The te
 Cargo configuration was restored afterward; it is not part of the patch. The test runner
 still used the upstream workspace and `rc-engine/dev` feature selection.
 
+## Follow-up Windows build
+
+The first preview subsequently passed cloud checks and built real Windows executables in
+[Actions run 38686301734](https://github.com/crystalfissure/rerac/actions/runs/38686301734).
+Its ZIP payload, manifest, checksum and PE binaries were inspected. This does not establish
+visual/gameplay correctness. The lighting/fog follow-up is described in `environment-mod.md`.
+
 ## Still unverified
 
 - Actual rendering with the user's supported extracted game data.
 - Repeated-swap GPU memory behaviour, transparency/clear artifacts, and loading pauses.
 - Planet travel, cutscenes, title-world return and donor overlay effects in a running game.
-- Windows compilation and a launcher-installable binary: the workflow is prepared but
-  has not run on a remote fork.
 
-This is a compile-checked, unit-tested **source prototype**, not a visually verified
+This is a compile-checked, unit-tested **binary preview**, not a visually verified
 playable release. See `sky-swapper.md` for controls, build instructions and runtime checks.
 
 The mod packaging fixture uses fake executables only to exercise archive assembly and

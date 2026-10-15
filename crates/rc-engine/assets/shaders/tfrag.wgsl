@@ -50,7 +50,7 @@
 // last word. (No bindings of their own: a changed material layout reorders draws and changes lightless frames.)
 
 #import bevy_pbr::view_transformations::{position_world_to_clip, position_world_to_view}
-#import rerac::world_lights::{WorldLight, NO_LIGHTS, tfrag_lit}
+#import rerac::world_lights::{WorldLight, NO_LIGHTS, tfrag_lit, environment_vertex_color}
 
 struct TfragFog {
     // rgb = FOGCOL (display-encoded 0..1), w = 1 when fog is enabled.
@@ -59,6 +59,9 @@ struct TfragFog {
     params: vec4<f32>,
     // x: the texture option (crate::graphics; sample_world).
     tex_mode: vec4<f32>,
+    // Environment mod: RGB scale and enabled flag, then RGB additive lift.
+    light_mul: vec4<f32>,
+    light_add: vec4<f32>,
 }
 
 struct TfragLod {
@@ -233,7 +236,7 @@ fn vertex(v: TfragVertex) -> TfragVertexOutput {
     let r = value(e.slot, m);
     out.position = position_world_to_clip(r.pos);
     out.uv = e.uv;
-    out.color = r.col / 128.0;
+    out.color = environment_vertex_color(r.col / 128.0, fog.light_mul, fog.light_add);
     let depth = depth_raw(r.pos);
     out.depth = depth;
     // VU: w = depth * slope (the w row of the matrix), += qw661.w, min qw656.z, max qw656.y, ftoi4.
